@@ -1,0 +1,29 @@
+services: # Docker compose expects a services 
+  backend: # Name of the service
+    build: ./backend
+    ports:
+      - 8080:8000
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 
+    volumes:
+      - ./backend/src:/app
+    develop:
+      watch:
+        - action: rebuild
+          path: backend/requirements.txt 
+        - action: rebuild
+          path: backend/Dockerfile 
+        - action: restart
+          path: backend/src/
+          #target: /app
+  static_html: # Name of the service
+    build:
+      context: ./static_html
+      dockerfile: static.Dockerfile
+    ports:
+      - 8000:8000
+      - 3000:8000
+    command: python -m http.server 8000
+    volumes:
+      - ./static_html/src:/app
+
+
