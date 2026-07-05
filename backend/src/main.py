@@ -14,4 +14,4 @@ MY_PROJECT = os.environ.get("MY_PROJECT") or "This is a default project"
 # Create a route
 @app.get("/")
 def read_index():
-    return {"Hello": "World",  "MY PROJECT NAME": MY_PROJECT, "API KEY": API_KEY}
+    return {"Hello": "World",  "MY PROJECT NAME": MY_PROJECT}
