@@ -23,8 +23,9 @@ class ChatMessage(SQLModel, table=True):
         nullable=False,
     )
 
+# Invoke-RestMethod -Method GET -Uri "http://localhost:8080/api/chats/recent/"
 class ChatMessage_listItem(SQLModel):
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None)
     message: str
     created_at: datetime = Field(default = None)
