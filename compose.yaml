@@ -13,6 +13,8 @@ services: # Docker compose expects a services
       - .env.sample
     volumes:
       - ./backend/src:/app
+    depends_on:
+      - db_service
     develop:
       watch:
         - action: rebuild
@@ -22,15 +24,31 @@ services: # Docker compose expects a services
         - action: restart
           path: backend/src/
           #target: /app
-  static_html: # Name of the service
-    build:
-      context: ./static_html
-      dockerfile: static.Dockerfile
+
+# Database_URL=postgresql+psycopg://dbuser:db-password@db_service:5432/mydb
+  db_service:
+    image: postgres:17.5
     ports:
-      - 8000:8000
-      - 3000:8000
-    command: python -m http.server 8000
+      - 5432:5432
     volumes:
-      - ./static_html/src:/app
+      - dc_manage_db_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=dbuser
+      - POSTGRES_PASSWORD=db-password
+      - POSTGRES_DB=mydb
+    #env_file:
+      #- .env.sample-db
+  #static_html: # Name of the service
+    #build:
+      #context: ./static_html
+      #dockerfile: static.Dockerfile
+    #ports:
+      #- 8000:8000
+      #- 3000:8000
+    #command: python -m http.server 8000
+    #volumes:
+      #- ./static_html/src:/app
 
 
+volumes:
+  dc_manage_db_data:

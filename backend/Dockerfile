@@ -1,5 +1,10 @@
 
-FROM python:3.15.0b3-trixie
+FROM python:3.13-slim
+
+# host docker.internal -> localhost
+# curl -X POST -d '{"message": "Hello, world!"}' http://host.docker.internal:8080/api/chats/
+# Invoke-RestMethod -Method POST -Uri "http://host.docker.internal:8080/api/chats/" -ContentType "application/json" -Body '{"message": "Hello, world!"}'
+RUN apt-get update && apt-get install -y curl
 
 RUN python -m venv /opt/venv/
 ENV PATH=/opt/venv/bin:$PATH

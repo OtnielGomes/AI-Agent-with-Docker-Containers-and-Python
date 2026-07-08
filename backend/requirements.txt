@@ -1,3 +1,5 @@
 fastapi==0.139.0
 uvicorn[standard]
 requests
+sqlmodel 
+psycopg[binary]

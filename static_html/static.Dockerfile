@@ -1,6 +1,6 @@
 # Declared the base image
 # FROM image name: latest
-FROM python:3.15.0b3-trixie
+FROM python:3.13-slim
 
 WORKDIR /app 
 
