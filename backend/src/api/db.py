@@ -3,18 +3,19 @@ import os
 import sqlmodel
 from sqlmodel import Session, SQLModel
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 if DATABASE_URL == "":
     raise NotImplementedError("`DATABASE_URL` needs to be set")
 
-#DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://")
+# Convert postgresql:// or postgres:// to psycopg:// for psycopg v3
+# This ensures SQLAlchemy uses the psycopg v3 driver instead of psycopg2
 if DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "psycopg://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 elif DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "psycopg://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
 
-engine = sqlmodel.create_engine(DATABASE_URL)
+engine = sqlmodel.create_engine(DATABASE_URL, echo=False)
 
 # Database models:
 def init_db():
