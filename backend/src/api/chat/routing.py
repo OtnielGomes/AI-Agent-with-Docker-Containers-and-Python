@@ -6,6 +6,8 @@ from sqlmodel import Session,select
 
 from .models import ChatMenssagePayload, ChatMessage, ChatMessage_listItem
 from api.db import get_session
+from api.ai.services import generate_email_message
+from api.ai.schemas import EmailMessageSchema
 
 # Router:
 router = APIRouter()
@@ -29,7 +31,18 @@ def chat_list_messages(session: Session = Depends(get_session)):
 # curl -X POST -d '{"message": "Hello, world!"} -H 'Content-Type: application/json' http://localhost:8080/api/chats/
 # Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" -ContentType "application/json" -Body '{"message": "Hello, world!"}'
 # Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" -ContentType "application/json" -Body '{"message": "Hello, world!"}'
-@router.post("/", response_model=ChatMessage)
+# curl -X POST -d '{"message": "Give me a summary of why it is good to go  outside."} -H "Content-Type: application/json" http://localhost:8080/api/chats/
+# Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" -ContentType "application/json" -Body '{"message": "Give me asummary of why it is good to go  outside."}'
+
+#$body = '{"message": "Give me a summary of why it is good to go outside."}'
+
+#Invoke-RestMethod `
+#  -Method POST `
+#  -Uri "http://localhost:8080/api/chats/" `
+#  -ContentType "application/json" `
+#  -Body $body
+
+@router.post("/", response_model=EmailMessageSchema)
 def chat_create_message(
     payload: ChatMenssagePayload,
     session: Session = Depends(get_session)
@@ -42,6 +55,7 @@ def chat_create_message(
     # ready to store in the database
     session.add(obj)
     session.commit()
-    session.refresh(obj) # ensure id/primary key add to the object instance
+    #session.refresh(obj) # ensure id/primary key add to the object instance
 
-    return obj
+    response = generate_email_message(payload.message)
+    return response
