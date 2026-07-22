@@ -1,13 +1,14 @@
 # imports:
 
 from typing import List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session,select
 
 from .models import ChatMenssagePayload, ChatMessage, ChatMessage_listItem
 from api.db import get_session
+from api.ai.agents import get_supervisor
 from api.ai.services import generate_email_message
-from api.ai.schemas import EmailMessageSchema
+from api.ai.schemas import EmailMessageSchema, SupervisorMessageSchema
 
 # Router:
 router = APIRouter()
@@ -42,7 +43,7 @@ def chat_list_messages(session: Session = Depends(get_session)):
 #  -ContentType "application/json" `
 #  -Body $body
 
-@router.post("/", response_model=EmailMessageSchema)
+@router.post("/", response_model=SupervisorMessageSchema)
 def chat_create_message(
     payload: ChatMenssagePayload,
     session: Session = Depends(get_session)
@@ -55,7 +56,21 @@ def chat_create_message(
     # ready to store in the database
     session.add(obj)
     session.commit()
-    #session.refresh(obj) # ensure id/primary key add to the object instance
-
-    response = generate_email_message(payload.message)
-    return response
+    supe = get_supervisor()
+    msg_data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": f"{payload.message}"
+            }
+        ]
+    }
+    result = supe.invoke(msg_data)
+    if not result:
+        raise HTTPException(status_code=400, detail="Failed to get supervisor response")
+    
+    messages = result.get("messages")
+    if not messages:
+        raise HTTPException(status_code=400, detail="Failed to get supervisor response")
+    
+    return messages[-1]

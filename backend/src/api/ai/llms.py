@@ -10,8 +10,8 @@ if not OPENAI_API_KEY:
 
 def get_openai_llm():
     openai_params = {
-        "api_key": OPENAI_API_KEY,
         "model": OPENAI_MODEL_NAME,
+        "api_key": OPENAI_API_KEY,
     }
     if OPENAI_BASE_URL:
         openai_params["base_url"] = OPENAI_BASE_URL
