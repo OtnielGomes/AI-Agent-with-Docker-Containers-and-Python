@@ -3,7 +3,6 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session,select
-from langgraph.checkpoint.memory import InMemorySaver
 
 
 from .models import ChatMenssagePayload, ChatMessage, ChatMessage_listItem
@@ -14,7 +13,6 @@ from api.ai.schemas import EmailMessageSchema, SupervisorMessageSchema
 
 # Router:
 router = APIRouter()
-checkpointer = InMemorySaver()
 
 # API/chats
 @router.get("/")
@@ -57,7 +55,7 @@ def chat_create_message(
     # ready to store in the database
     session.add(obj)
     session.commit()
-    supe = get_supervisor(checkpointer=checkpointer)
+    supe = get_supervisor()
     msg_data = {
         "messages": [
             {

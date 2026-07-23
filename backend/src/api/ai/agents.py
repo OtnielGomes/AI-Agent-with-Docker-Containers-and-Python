@@ -47,7 +47,7 @@ def get_research_agent():
 
 # supe = get_supervisor()
 # supe.invoke({"messages": [{"role": "user", "content": "Find out how to create a latte then email me the results."}]})
-def get_supervisor(checkpointer=None):
+def get_supervisor():
     llm = get_openai_llm()
     email_agent = get_email_agent()
     research_agent = get_research_agent()
@@ -63,6 +63,6 @@ def get_supervisor(checkpointer=None):
             "Never ask the user for an email address. "
             "Never stop after research to ask for confirmation — complete the send."
         ),
-    ).compile(checkpointer=checkpointer)
+    ).compile()
 
     return supe
