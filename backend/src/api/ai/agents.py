@@ -19,7 +19,7 @@ def get_email_agent():
     agent = create_react_agent(
         model=model,
         tools=EMAIL_TOOLS_LIST,
-        prompt="You are a helpful assistant for managing my email inbox for generating, sending and reviewing email.",
+        prompt="You are a helpful assistant for managing my email inbox for generating, sending, and reviewing emails.",
         name = "email_agent",
     )
     return agent
@@ -38,7 +38,7 @@ def get_research_agent():
 
 # supe = get_supervisor()
 # supe.invoke({"messages": [{"role": "user", "content": "Find out how to create a latte then email me the results."}]})
-def get_supervisor():
+def get_supervisor(checkpointer=None):
     llm = get_openai_llm()
     email_agent = get_email_agent()
     research_agent = get_research_agent()
@@ -50,6 +50,6 @@ def get_supervisor():
             "You manage a research assistant and a"
             "email inbox manager assistant. Assign work to them."
         )
-    ).compile()
+    ).compile(checkpointer=checkpointer)
 
     return supe

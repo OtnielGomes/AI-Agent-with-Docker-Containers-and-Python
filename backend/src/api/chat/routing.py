@@ -3,6 +3,8 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session,select
+from langgraph.checkpoint.memory import InMemorySaver
+
 
 from .models import ChatMenssagePayload, ChatMessage, ChatMessage_listItem
 from api.db import get_session
@@ -12,6 +14,7 @@ from api.ai.schemas import EmailMessageSchema, SupervisorMessageSchema
 
 # Router:
 router = APIRouter()
+checkpointer = InMemorySaver()
 
 # API/chats
 @router.get("/")
@@ -50,19 +53,17 @@ def chat_create_message(
     ):
 
     data = payload.model_dump() # pydantic -> dict
-    print(data)
-
     obj = ChatMessage.model_validate(data)
     # ready to store in the database
     session.add(obj)
     session.commit()
-    supe = get_supervisor()
+    supe = get_supervisor(checkpointer=checkpointer)
     msg_data = {
         "messages": [
             {
                 "role": "user",
                 "content": f"{payload.message}"
-            }
+            },
         ]
     }
     result = supe.invoke(msg_data)
