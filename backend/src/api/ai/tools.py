@@ -1,9 +1,33 @@
 # Imports:
 from langchain_core.tools import tool
-from langchain_core.runnables import RunnableConfig
 from api.myemailer.sender import send_mail
 from api.myemailer.inbox_reader import read_inbox
 from api.ai.services import generate_email_message
+
+_MAX_BODY_CHARS = 1500
+_MAX_TOOL_OUTPUT_CHARS = 12000
+
+
+def _format_emails_for_tool(emails: list[dict]) -> str:
+    """Format parsed inbox emails for LLM consumption."""
+    if not emails:
+        return "No emails found matching the criteria."
+
+    cleaned: list[str] = []
+    for email in emails:
+        data = email.copy()
+        data.pop("html_body", None)
+        if "body" in data and isinstance(data["body"], str):
+            body = data["body"]
+            if len(body) > _MAX_BODY_CHARS:
+                data["body"] = body[:_MAX_BODY_CHARS] + "…"
+        parts = [f"{key}:\t{value}" for key, value in data.items()]
+        cleaned.append("\n".join(parts))
+
+    result = "\n-----\n".join(cleaned)
+    if len(result) > _MAX_TOOL_OUTPUT_CHARS:
+        return result[:_MAX_TOOL_OUTPUT_CHARS] + "\n… (truncated)"
+    return result
 
 @tool
 def research_email(query:str):
@@ -40,25 +64,47 @@ def send_me_email(subject:str, content:str) -> str:
 
 
 @tool
-def get_unread_emails(hours_ago:int=48) -> str:
+def get_recent_emails(
+    limit: int = 10,
+    hours_ago: int = 168,
+    unread_only: bool = False,
+) -> str:
     """
-    Get unread emails from the last 48 hours.
+    Fetch recent inbox emails for reading, listing, or summarizing.
+
+    Args:
+        limit: Maximum number of emails to return (most recent first).
+        hours_ago: How far back to search, in hours (default 7 days).
+        unread_only: If True, return only unread emails.
+    """
+    try:
+        emails = read_inbox(
+            hours_ago=hours_ago,
+            unread_only=unread_only,
+            limit=limit,
+            verbose=False,
+        )
+    except Exception as e:
+        return f"Error getting recent emails: {e}"
+
+    return _format_emails_for_tool(emails)
+
+
+@tool
+def get_unread_emails(hours_ago: int = 48) -> str:
+    """
+    Get unread emails from the inbox.
 
     Args:
         hours_ago: The number of hours ago to get unread emails from.
     """
     try:
-        emails = read_inbox(hours_ago=hours_ago, verbose=False)
+        emails = read_inbox(
+            hours_ago=hours_ago,
+            unread_only=True,
+            verbose=False,
+        )
     except Exception as e:
         return f"Error getting unread emails: {e}"
 
-    cleaned = []
-    for email in emails:
-        data = email.copy()
-        if "html_body" in data:
-            data.pop('html_body')
-        msg = ""
-        for k, v in data.items():
-            msg += f"{k}:\t{v}"
-        cleaned.append(msg)
-    return "\n-----\n".join(cleaned)[:500]
+    return _format_emails_for_tool(emails)

@@ -8,8 +8,8 @@ from sqlmodel import Session,select
 from .models import ChatMenssagePayload, ChatMessage, ChatMessage_listItem
 from api.db import get_session
 from api.ai.agents import get_supervisor
-from api.ai.services import generate_email_message
-from api.ai.schemas import EmailMessageSchema, SupervisorMessageSchema
+from api.ai.messages import extract_assistant_reply
+from api.ai.schemas import SupervisorMessageSchema
 
 # Router:
 router = APIRouter()
@@ -72,4 +72,4 @@ def chat_create_message(
     if not messages:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     
-    return messages[-1]
+    return {"content": extract_assistant_reply(messages)}

@@ -25,6 +25,26 @@ services: # Docker compose expects a services
           path: backend/src/
           #target: /app
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    develop:
+      watch:
+        - action: rebuild
+          path: frontend/requirements.txt
+        - action: rebuild
+          path: frontend/Dockerfile
+        - action: sync+restart
+          path: frontend/
+          target: /app
+
 # Database_URL=postgresql+psycopg://dbuser:db-password@db_service:5432/mydb
   db_service:
     image: postgres:17.5
@@ -36,19 +56,6 @@ services: # Docker compose expects a services
       - POSTGRES_USER=dbuser
       - POSTGRES_PASSWORD=db-password
       - POSTGRES_DB=mydb
-    #env_file:
-      #- .env.sample-db
-  #static_html: # Name of the service
-    #build:
-      #context: ./static_html
-      #dockerfile: static.Dockerfile
-    #ports:
-      #- 8000:8000
-      #- 3000:8000
-    #command: python -m http.server 8000
-    #volumes:
-      #- ./static_html/src:/app
-
 
 volumes:
   dc_manage_db_data:

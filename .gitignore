@@ -1,0 +1,43 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment and secrets (keep .env.sample tracked)
+.env
+.env.local
+.env.*.local
+
+# IDE and editor
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Agent skills (local Cursor config)
+.agents/
+skills-lock.json
+
+# Project docs for local agents only
+AGENTS.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
