@@ -11,6 +11,7 @@ from api.myemailer.sender import send_mail
 from api.myemailer.inbox_reader import read_inbox
 from api.myemailer.validation import is_valid_email
 from api.ai.services import generate_email_message
+from api.ai.email_sanitize import sanitize_email_body
 
 
 def _resolve_recipient(
@@ -88,7 +89,8 @@ def send_me_email(
     """
     try:
         recipient = _resolve_recipient(config, to_email)
-        send_mail(subject=subject, content=content, to_email=recipient)
+        clean_content = sanitize_email_body(content)
+        send_mail(subject=subject, content=clean_content, to_email=recipient)
     except Exception as e:
         return f"Error sending email: {e}"
     return f"Email sent successfully to {recipient}."
