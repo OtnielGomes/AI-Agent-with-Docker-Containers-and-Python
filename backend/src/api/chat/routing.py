@@ -10,6 +10,7 @@ from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
 from api.ai.schemas import SupervisorMessageSchema
+from api.myemailer.validation import is_valid_email
 
 # Router:
 router = APIRouter()
@@ -50,21 +51,28 @@ def chat_create_message(
     session: Session = Depends(get_session)
     ):
 
-    data = payload.model_dump() # pydantic -> dict
+    if payload.to_email is not None and not is_valid_email(payload.to_email):
+        raise HTTPException(status_code=400, detail="Invalid to_email address.")
+
+    data = payload.model_dump(exclude={"to_email"})
     obj = ChatMessage.model_validate(data)
-    # ready to store in the database
     session.add(obj)
     session.commit()
+
     supe = get_supervisor()
     msg_data = {
         "messages": [
             {
                 "role": "user",
-                "content": f"{payload.message}"
+                "content": payload.message,
             },
         ]
     }
-    result = supe.invoke(msg_data)
+    invoke_config = None
+    if payload.to_email:
+        invoke_config = {"configurable": {"to_email": payload.to_email.strip()}}
+
+    result = supe.invoke(msg_data, config=invoke_config)
     if not result:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     

@@ -10,6 +10,7 @@ def get_utc_now():
 # Validation
 class ChatMenssagePayload(SQLModel):
     message: str
+    to_email: str | None = None
 
 # Saving, getting,updating, deleting:
 class ChatMessage(SQLModel, table=True):

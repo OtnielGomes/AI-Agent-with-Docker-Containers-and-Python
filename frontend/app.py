@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 
 from api_client import ApiClientError, check_health, get_backend_url, send_message
@@ -11,6 +13,8 @@ EXAMPLE_PROMPTS = [
     "Write me an email about artificial intelligence applied to business.",
     "Help me write an email to schedule a meeting for this week.",
 ]
+
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 st.set_page_config(
     page_title="AI Agent Chat",
@@ -26,6 +30,27 @@ if "backend_url" not in st.session_state:
 
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt: str | None = None
+
+if "send_to_self" not in st.session_state:
+    st.session_state.send_to_self = True
+
+if "other_recipient_email" not in st.session_state:
+    st.session_state.other_recipient_email = ""
+
+
+def is_valid_email(address: str) -> bool:
+    """Return True if the string looks like a valid email address."""
+    if not address or not address.strip():
+        return False
+    return bool(_EMAIL_PATTERN.match(address.strip()))
+
+
+def get_selected_recipient() -> str | None:
+    """Return explicit recipient when 'Outro email' is selected, else None."""
+    if st.session_state.send_to_self:
+        return None
+    email = st.session_state.other_recipient_email.strip()
+    return email or None
 
 
 def render_sidebar() -> None:
@@ -43,6 +68,49 @@ def render_sidebar() -> None:
                 st.success("API is online")
             else:
                 st.error("API is offline or unreachable")
+
+        st.divider()
+        st.subheader("Email recipient")
+
+        def _sync_recipient_mode() -> None:
+            if st.session_state.recipient_other_email:
+                st.session_state.send_to_self = False
+            else:
+                st.session_state.send_to_self = True
+
+        st.checkbox(
+            "Send an email to myself",
+            value=st.session_state.send_to_self,
+            on_change=_sync_recipient_mode,
+            key="recipient_send_to_self",
+            help="Uses the primary email address configured by the wizard.",
+        )
+        st.checkbox(
+            "Other email",
+            value=not st.session_state.send_to_self,
+            on_change=_sync_recipient_mode,
+            key="recipient_other_email",
+            help="Enter a different recipient below.",
+        )
+
+        if (
+            st.session_state.recipient_send_to_self
+            and st.session_state.recipient_other_email
+        ):
+            st.session_state.send_to_self = False
+
+        if st.session_state.send_to_self:
+            st.caption("The emails will be sent to the primary email address configured in the app.")
+        else:
+            st.session_state.other_recipient_email = st.text_input(
+                "Recipient's email",
+                value=st.session_state.other_recipient_email,
+                placeholder="name@exemple.com",
+            )
+            if st.session_state.other_recipient_email and not is_valid_email(
+                st.session_state.other_recipient_email
+            ):
+                st.error("Enter a valid email address..")
 
         st.divider()
         st.subheader("Example prompts")
@@ -82,6 +150,15 @@ def render_chat_history() -> None:
 
 def handle_user_message(user_text: str) -> None:
     """Append user message, call API, append assistant reply."""
+    to_email = get_selected_recipient()
+    if not st.session_state.send_to_self:
+        if not to_email:
+            st.error("Enter the recipient's email in the sidebar..")
+            return
+        if not is_valid_email(to_email):
+            st.error("Invalid recipient email.")
+            return
+
     st.session_state.messages.append({"role": "user", "content": user_text})
 
     with st.chat_message("user"):
@@ -90,7 +167,11 @@ def handle_user_message(user_text: str) -> None:
     with st.chat_message("assistant"):
         with st.spinner("Agent is working... This may take up to a few minutes."):
             try:
-                reply = send_message(st.session_state.backend_url, user_text)
+                reply = send_message(
+                    st.session_state.backend_url,
+                    user_text,
+                    to_email=to_email,
+                )
             except ApiClientError as exc:
                 reply = f"**Error:** {exc}"
             st.markdown(reply)

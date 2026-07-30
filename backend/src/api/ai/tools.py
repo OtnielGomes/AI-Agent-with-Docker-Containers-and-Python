@@ -1,8 +1,32 @@
 # Imports:
-from langchain_core.tools import tool
+from __future__ import annotations
+
+import os
+from typing import Annotated
+
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import InjectedToolArg, tool
+
 from api.myemailer.sender import send_mail
 from api.myemailer.inbox_reader import read_inbox
+from api.myemailer.validation import is_valid_email
 from api.ai.services import generate_email_message
+
+
+def _resolve_recipient(
+    config: RunnableConfig | None,
+    tool_to_email: str | None = None,
+) -> str:
+    """Pick recipient: request config overrides tool arg, then env default."""
+    configured = None
+    if config:
+        configured = config.get("configurable", {}).get("to_email")
+    recipient = configured or tool_to_email or os.environ.get("EMAIL_ADDRESS")
+    if not recipient:
+        raise ValueError("No recipient email configured.")
+    if not is_valid_email(recipient):
+        raise ValueError(f"Invalid recipient email: {recipient}")
+    return recipient.strip()
 
 _MAX_BODY_CHARS = 1500
 _MAX_TOOL_OUTPUT_CHARS = 12000
@@ -47,20 +71,27 @@ def research_email(query:str):
     return msg
 
 @tool
-def send_me_email(subject:str, content:str) -> str:
-
-    """
-    Send an email to myself with a subject and content.
+def send_me_email(
+    subject: str,
+    content: str,
+    to_email: str | None = None,
+    *,
+    config: Annotated[RunnableConfig, InjectedToolArg],
+) -> str:
+    """Send an email with a subject and plain-text content.
 
     Args:
         subject: The subject of the email.
         content: The content of the email.
+        to_email: Optional recipient. Omit to use the default inbox address
+            or the recipient selected in the UI for this request.
     """
     try:
-        send_mail(subject=subject, content=content)   
+        recipient = _resolve_recipient(config, to_email)
+        send_mail(subject=subject, content=content, to_email=recipient)
     except Exception as e:
         return f"Error sending email: {e}"
-    return "Email sent successfully."
+    return f"Email sent successfully to {recipient}."
 
 
 @tool

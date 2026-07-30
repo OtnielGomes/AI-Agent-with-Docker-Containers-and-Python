@@ -35,12 +35,17 @@ def check_health(base_url: str | None = None) -> bool:
         return False
 
 
-def send_message(base_url: str, message: str) -> str:
+def send_message(
+    base_url: str,
+    message: str,
+    to_email: str | None = None,
+) -> str:
     """Send a chat message and return the assistant content.
 
     Args:
         base_url: Backend base URL.
         message: User message text.
+        to_email: Optional explicit recipient for outbound email.
 
     Returns:
         Assistant response content string.
@@ -49,10 +54,13 @@ def send_message(base_url: str, message: str) -> str:
         ApiClientError: On network, timeout, or HTTP errors.
     """
     url = base_url.rstrip("/")
+    payload: dict[str, str] = {"message": message}
+    if to_email:
+        payload["to_email"] = to_email
     try:
         response = requests.post(
             f"{url}/api/chats/",
-            json={"message": message},
+            json=payload,
             headers={"Content-Type": "application/json"},
             timeout=DEFAULT_TIMEOUT_SECONDS,
         )
