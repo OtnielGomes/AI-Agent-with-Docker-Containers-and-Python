@@ -32,7 +32,7 @@ services: # Docker compose expects a services
     ports:
       - "8501:8501"
     environment:
-      - BACKEND_URL=http://backend:8000
+      - BACKEND_URL=http://backend:8080
     depends_on:
       - backend
     develop:
