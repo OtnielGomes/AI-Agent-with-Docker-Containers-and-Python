@@ -64,7 +64,9 @@ def render_sidebar() -> None:
         ).rstrip("/")
 
         if st.button("Test connection", use_container_width=True):
-            if check_health(st.session_state.backend_url):
+            online = check_health(st.session_state.backend_url)
+            st.session_state.api_online = online
+            if online:
                 st.success("API is online")
             else:
                 st.error("API is offline or unreachable")
@@ -134,8 +136,9 @@ def render_header() -> None:
             "History is kept for this session only."
         )
     with col_status:
-        online = check_health(st.session_state.backend_url)
-        if online:
+        if "api_online" not in st.session_state:
+            st.session_state.api_online = check_health(st.session_state.backend_url)
+        if st.session_state.api_online:
             st.success("API online")
         else:
             st.error("API offline")
