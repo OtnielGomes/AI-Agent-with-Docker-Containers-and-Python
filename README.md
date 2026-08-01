@@ -118,7 +118,7 @@ cd AI-Agent-with-Docker-Containers-and-Python
 2. Copy the environment template:
 
 ```bash
-cp .env.sample .env
+cp .env.example .env
 ```
 
 3. Edit `.env` with your real values (never commit secrets):
@@ -229,7 +229,7 @@ docker run -p 8000:8000 --env-file .env ai-agent-backend \
 ```
 .
 ├── compose.yaml              # Backend + frontend + Postgres
-├── .env.sample               # Environment variable template (placeholders)
+├── .env.example              # Environment variable template (placeholders)
 ├── images/                   # Screenshots and demos
 ├── frontend/
 │   ├── app.py                # Streamlit UI (chat, recipient, prompts)
@@ -257,4 +257,3 @@ docker run -p 8000:8000 --env-file .env ai-agent-backend \
 | Empty inbox | Correct App Password; IMAP enabled on Gmail account |
 | API connection error | Correct `BACKEND_URL`; backend online (`GET /api/chats/`) |
 
-For architecture details and coding conventions, see [AGENTS.md](./AGENTS.md).

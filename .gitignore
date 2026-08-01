@@ -16,7 +16,7 @@ env/
 .coverage
 htmlcov/
 
-# Environment and secrets (keep .env.sample tracked)
+# Environment and secrets (keep .env.example tracked as the public template)
 .env
 .env.local
 .env.*.local
