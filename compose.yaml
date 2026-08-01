@@ -10,7 +10,7 @@ services: # Docker compose expects a services
       - PORT=8000
       - MY_PROJECT=Hello World 
     env_file:
-      - .env.sample
+      - .env.sample # This is the environment file for the backend .env.example file
     volumes:
       - ./backend/src:/app
     depends_on:

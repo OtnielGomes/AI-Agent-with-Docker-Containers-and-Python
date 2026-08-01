@@ -16,12 +16,9 @@ env/
 .coverage
 htmlcov/
 
-# Environment and secrets (keep .env.example tracked as the public template)
-.env
-.env.local
-.env.*.local
-.env.sample
-.env.sample-db
+# Environment and secrets (only .env.example is tracked as the public template)
+.env*
+!.env.example
 
 
 # IDE and editor
