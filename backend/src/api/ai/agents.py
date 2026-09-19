@@ -1,8 +1,11 @@
 # Imports:
+import os
+
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
 
 from api.ai.llms import get_openai_llm
+from api.ai.outbound_email_body import outbound_email_body_generation_hint
 from api.ai.tools import (
     send_me_email,
     get_recent_emails,
@@ -32,9 +35,8 @@ def get_email_agent():
             "for the destination address before sending. "
             "Never say you cannot access the inbox — use the available tools first. "
             "Never ask for confirmation before sending. "
-            "When calling send_me_email, pass clean plain-text body only: no markdown, "
-            "no [Seu nome] or other placeholders, no 'Abraço,\\n[Your name]' style closings. "
-            "Use a natural short closing or end on the last content paragraph. "
+            "When calling send_me_email, pass clean plain-text body only: no markdown. "
+            f"{outbound_email_body_generation_hint(os.environ.get('EMAIL_SENDER_NAME', ''))} "
             "After fetching emails, provide a clear summary or list as requested. "
             "After sending, briefly confirm success and mention the recipient."
         ),
@@ -51,8 +53,8 @@ def get_research_agent():
         prompt=(
             "You are a research assistant that prepares email-ready content. "
             "Use research_email for research requests and return clear subject and body text. "
-            "The body must be plain text with no placeholders like [Seu nome]. "
-            "Prefer a natural ending or a brief closing (e.g. 'Abraço!') — never placeholder signatures."
+            "The body must be plain text. "
+            f"{outbound_email_body_generation_hint(os.environ.get('EMAIL_SENDER_NAME', ''))}"
         ),
         name="research_agent",
     )

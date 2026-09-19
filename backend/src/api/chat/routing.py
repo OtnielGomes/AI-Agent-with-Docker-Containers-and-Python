@@ -10,7 +10,7 @@ from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
 from api.ai.schemas import SupervisorMessageSchema
-from api.myemailer.validation import is_valid_email
+from api.myemailer.recipient import validated_recipient
 
 # Router:
 router = APIRouter()
@@ -51,8 +51,13 @@ def chat_create_message(
     session: Session = Depends(get_session)
     ):
 
-    if payload.to_email is not None and not is_valid_email(payload.to_email):
-        raise HTTPException(status_code=400, detail="Invalid to_email address.")
+    if payload.to_email is not None:
+        try:
+            pin = validated_recipient(payload.to_email)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid to_email address.")
+    else:
+        pin = None
 
     data = payload.model_dump(exclude={"to_email"})
     obj = ChatMessage.model_validate(data)
@@ -69,8 +74,8 @@ def chat_create_message(
         ]
     }
     invoke_config = None
-    if payload.to_email:
-        invoke_config = {"configurable": {"to_email": payload.to_email.strip()}}
+    if pin:
+        invoke_config = {"configurable": {"to_email": pin}}
 
     result = supe.invoke(msg_data, config=invoke_config)
     if not result:

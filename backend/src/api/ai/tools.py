@@ -9,25 +9,10 @@ from langchain_core.tools import InjectedToolArg, tool
 
 from api.myemailer.sender import send_mail
 from api.myemailer.inbox_reader import read_inbox
-from api.myemailer.validation import is_valid_email
+from api.myemailer.recipient import resolve_recipient
 from api.ai.services import generate_email_message
-from api.ai.email_sanitize import sanitize_email_body
+from api.ai.outbound_email_body import prepare_outbound_email_body
 
-
-def _resolve_recipient(
-    config: RunnableConfig | None,
-    tool_to_email: str | None = None,
-) -> str:
-    """Pick recipient: request config overrides tool arg, then env default."""
-    configured = None
-    if config:
-        configured = config.get("configurable", {}).get("to_email")
-    recipient = configured or tool_to_email or os.environ.get("EMAIL_ADDRESS")
-    if not recipient:
-        raise ValueError("No recipient email configured.")
-    if not is_valid_email(recipient):
-        raise ValueError(f"Invalid recipient email: {recipient}")
-    return recipient.strip()
 
 _MAX_BODY_CHARS = 1500
 _MAX_TOOL_OUTPUT_CHARS = 12000
@@ -88,8 +73,15 @@ def send_me_email(
             or the recipient selected in the UI for this request.
     """
     try:
-        recipient = _resolve_recipient(config, to_email)
-        clean_content = sanitize_email_body(content)
+        pinned = None
+        if config:
+            pinned = config.get("configurable", {}).get("to_email")
+        recipient = resolve_recipient(
+            pinned=pinned,
+            named=to_email,
+            default=os.environ.get("EMAIL_ADDRESS"),
+        )
+        clean_content = prepare_outbound_email_body(content)
         send_mail(subject=subject, content=clean_content, to_email=recipient)
     except Exception as e:
         return f"Error sending email: {e}"

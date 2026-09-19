@@ -1,4 +1,4 @@
-"""Normalize generated email body text before sending."""
+"""Prepare an Outbound email body for sending."""
 
 from __future__ import annotations
 
@@ -15,9 +15,25 @@ _ORPHAN_CLOSING_LINES = re.compile(
 )
 
 
-def sanitize_email_body(body: str) -> str:
-    """Remove placeholder signatures and tidy trailing closings."""
-    text = _PLACEHOLDER_PATTERN.sub("", body)
+def outbound_email_body_generation_hint(sender_name: str) -> str:
+    name = (sender_name or "").strip()
+    if name:
+        signing_rule = f"If you sign the email, use only this name: {name}."
+    else:
+        signing_rule = (
+            "Do not add a signature name unless the user explicitly provides one."
+        )
+    return (
+        "Never use placeholders such as [Seu nome], [Your name], [Nome], or similar. "
+        f"{signing_rule} "
+        "End informational emails on the last useful paragraph, or with a brief natural "
+        "closing (e.g. 'Abraço!' or 'Até mais!'). "
+        "Never end with 'Abraço,' followed by a name placeholder on the next line."
+    )
+
+
+def prepare_outbound_email_body(raw: str) -> str:
+    text = _PLACEHOLDER_PATTERN.sub("", raw)
     lines = text.splitlines()
     cleaned: list[str] = []
 
