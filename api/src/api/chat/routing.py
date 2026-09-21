@@ -10,6 +10,7 @@ from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
 from api.ai.schemas import SupervisorMessageSchema
+from api.drafts import chat_turn_payload, collecting_created_drafts
 from api.myemailer.recipient import validated_recipient
 
 # Router:
@@ -77,7 +78,8 @@ def chat_create_message(
     if pin:
         invoke_config = {"configurable": {"to_email": pin}}
 
-    result = supe.invoke(msg_data, config=invoke_config)
+    with collecting_created_drafts() as drafts:
+        result = supe.invoke(msg_data, config=invoke_config)
     if not result:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     
@@ -85,4 +87,4 @@ def chat_create_message(
     if not messages:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     
-    return {"content": extract_assistant_reply(messages)}
+    return chat_turn_payload(extract_assistant_reply(messages), drafts)

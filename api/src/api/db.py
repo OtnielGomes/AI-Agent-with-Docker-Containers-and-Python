@@ -16,6 +16,9 @@ engine = sqlmodel.create_engine(DATABASE_URL)
 # Database models:
 def init_db():
     print("Creating database tables...")
+    from api.chat.models import ChatMessage  # noqa: F401
+    from api.drafts import Draft  # noqa: F401
+
     SQLModel.metadata.create_all(engine)
 
 # Api routes:

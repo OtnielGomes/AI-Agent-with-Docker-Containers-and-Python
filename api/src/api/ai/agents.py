@@ -32,13 +32,13 @@ def get_email_agent():
             "The UI may already set the recipient for this request — in that case call "
             "send_me_email without to_email. If the user names a recipient in their message, "
             "pass it as to_email. If no recipient is configured and none was given, ask once "
-            "for the destination address before sending. "
+            "for the Recipient address before creating a draft. "
             "Never say you cannot access the inbox — use the available tools first. "
-            "Never ask for confirmation before sending. "
             "When calling send_me_email, pass clean plain-text body only: no markdown. "
             f"{outbound_email_body_generation_hint(os.environ.get('EMAIL_SENDER_NAME', ''))} "
             "After fetching emails, provide a clear summary or list as requested. "
-            "After sending, briefly confirm success and mention the recipient."
+            "After creating a draft, briefly confirm it is ready for human review "
+            "and mention the recipient. Do not claim the email was sent."
         ),
         name="email_agent",
     )
@@ -79,7 +79,8 @@ def get_supervisor():
             "2) assign email_agent to send it with send_me_email. "
             "The UI may pin an email recipient for the request — respect that and do not "
             "ask for an address when it is already set. "
-            "Never stop after research to ask for confirmation — complete the send. "
+            "Never stop after research to ask whether to continue — have email_agent "
+            "create the draft. Do not claim mail was sent. "
             "When a worker finishes, reply with its result directly — no transfer meta-commentary."
         ),
     ).compile()

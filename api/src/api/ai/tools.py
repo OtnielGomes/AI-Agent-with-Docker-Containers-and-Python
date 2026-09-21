@@ -6,12 +6,12 @@ from typing import Annotated
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolArg, tool
+from sqlmodel import Session
 
-from api.myemailer.sender import send_mail
-from api.myemailer.inbox_reader import read_inbox
-from api.myemailer.recipient import resolve_recipient
 from api.ai.services import generate_email_message
-from api.ai.outbound_email_body import prepare_outbound_email_body
+from api.db import engine
+from api.drafts import create_open_draft
+from api.myemailer.inbox_reader import read_inbox
 
 
 _MAX_BODY_CHARS = 1500
@@ -64,7 +64,7 @@ def send_me_email(
     *,
     config: Annotated[RunnableConfig, InjectedToolArg],
 ) -> str:
-    """Send an email with a subject and plain-text content.
+    """Create an email Draft with a subject and plain-text content.
 
     Args:
         subject: The subject of the email.
@@ -76,16 +76,21 @@ def send_me_email(
         pinned = None
         if config:
             pinned = config.get("configurable", {}).get("to_email")
-        recipient = resolve_recipient(
-            pinned=pinned,
-            named=to_email,
-            default=os.environ.get("EMAIL_ADDRESS"),
-        )
-        clean_content = prepare_outbound_email_body(content)
-        send_mail(subject=subject, content=clean_content, to_email=recipient)
+        with Session(engine) as session:
+            draft = create_open_draft(
+                session,
+                subject=subject,
+                body=content,
+                pinned=pinned,
+                named=to_email,
+                default=os.environ.get("EMAIL_ADDRESS"),
+            )
     except Exception as e:
-        return f"Error sending email: {e}"
-    return f"Email sent successfully to {recipient}."
+        return f"Error creating email draft: {e}"
+    return (
+        f"Draft created for {draft.recipient} with subject {draft.subject}. "
+        "It will be sent only after the human confirms it in the chat UI."
+    )
 
 
 @tool

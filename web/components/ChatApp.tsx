@@ -3,9 +3,19 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { isValidEmail } from "@/lib/email";
+import type { DraftCard } from "@/lib/assistant";
+import { DraftReviewCard } from "@/components/DraftReviewCard";
 
 type ChatRole = "user" | "assistant";
 type ChatTurn = { role: ChatRole; content: string };
+
+function mergeDrafts(current: DraftCard[], incoming: DraftCard[]): DraftCard[] {
+  const byId = new Map(current.map((draft) => [draft.id, draft]));
+  for (const draft of incoming) {
+    byId.set(draft.id, draft);
+  }
+  return [...byId.values()];
+}
 
 const EXAMPLE_PROMPTS = [
   "Summarize my last 3 emails.",
@@ -15,6 +25,7 @@ const EXAMPLE_PROMPTS = [
 
 export function ChatApp() {
   const [messages, setMessages] = useState<ChatTurn[]>([]);
+  const [reviewDrafts, setReviewDrafts] = useState<DraftCard[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [backendUrl, setBackendUrl] = useState("");
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
@@ -38,10 +49,12 @@ export function ChatApp() {
         }
         if (!cancelled) {
           await refreshHealth(url || undefined);
+          await loadOpenDrafts(url || undefined);
         }
       } catch {
         if (!cancelled) {
           await refreshHealth();
+          await loadOpenDrafts();
         }
       }
     }
@@ -49,11 +62,32 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
+    // Mount-only: config, health, and open Drafts for this page load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isSending]);
+  }, [messages, reviewDrafts, isSending]);
+
+  async function loadOpenDrafts(url?: string) {
+    const override = (url ?? backendUrl).trim();
+    try {
+      const query = override
+        ? `?backendUrl=${encodeURIComponent(override)}`
+        : "";
+      const response = await fetch(`/api/drafts${query}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(8_000),
+      });
+      const data = (await response.json()) as { drafts?: DraftCard[] };
+      if (response.ok && Array.isArray(data.drafts)) {
+        setReviewDrafts(data.drafts);
+      }
+    } catch {
+      // Keep any Drafts already in memory if hydration fails.
+    }
+  }
 
   async function refreshHealth(url?: string) {
     const override = (url ?? backendUrl).trim();
@@ -106,6 +140,7 @@ export function ChatApp() {
     setIsSending(true);
 
     let reply: string;
+    let drafts: DraftCard[] = [];
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -118,18 +153,26 @@ export function ChatApp() {
       });
       const data = (await response.json()) as {
         content?: string;
+        drafts?: DraftCard[];
         error?: string;
       };
       if (!response.ok || data.content == null) {
         reply = `**Error:** ${data.error ?? "Request failed."}`;
       } else {
         reply = data.content;
+        drafts = Array.isArray(data.drafts) ? data.drafts : [];
       }
     } catch (error) {
       reply = `**Error:** ${error instanceof Error ? error.message : "Request failed."}`;
     }
 
-    setMessages((current) => [...current, { role: "assistant", content: reply }]);
+    setMessages((current) => [
+      ...current,
+      { role: "assistant", content: reply },
+    ]);
+    if (drafts.length > 0) {
+      setReviewDrafts((current) => mergeDrafts(current, drafts));
+    }
     setIsSending(false);
   }
 
@@ -307,6 +350,27 @@ export function ChatApp() {
               </pre>
             </article>
           ))}
+          {reviewDrafts.length > 0 ? (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm font-medium text-zinc-600">
+                Drafts to review
+              </p>
+              {reviewDrafts.map((draft) => (
+                <DraftReviewCard
+                  key={draft.id}
+                  draft={draft}
+                  backendUrl={backendUrl}
+                  onChange={(next) => {
+                    setReviewDrafts((current) =>
+                      current.map((existing) =>
+                        existing.id === next.id ? next : existing,
+                      ),
+                    );
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
           {isSending ? (
             <p className="text-sm text-zinc-500">
               Agent is working... This may take up to a few minutes.

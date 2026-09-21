@@ -26,12 +26,12 @@ export async function POST(request: Request) {
       : null;
 
   try {
-    const content = await sendChatMessage(
+    const result = await sendChatMessage(
       resolveBackendUrl(override),
       message,
       pinnedRecipient,
     );
-    return Response.json({ content });
+    return Response.json(result);
   } catch (error) {
     const text =
       error instanceof AssistantError
