@@ -39,5 +39,7 @@ AGENTS.md
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/secrets.toml
+# Next.js
+node_modules/
+.next/
+out/

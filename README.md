@@ -3,11 +3,11 @@
 [![Python](https://img.shields.io/badge/Python-3.13-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.139-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C?style=flat-square)](https://langchain-ai.github.io/langgraph/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Next.js](https://img.shields.io/badge/Next.js-UI-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-A **LangGraph multi-agent** chat assistant that researches content, reads your inbox, and sends emails via Gmail. **FastAPI** backend, **Streamlit** UI, and **PostgreSQL** persistence — all orchestrated with **Docker Compose** and ready to deploy on platforms like **DigitalOcean App Platform**.
+A **LangGraph multi-agent** chat assistant that researches content, reads your inbox, and sends emails via Gmail. **FastAPI** assistant (`api/`), **Next.js** chat UI (`web/`), and **PostgreSQL** persistence — all orchestrated with **Docker Compose** and ready to deploy on platforms like **DigitalOcean App Platform**.
 
 [Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Demos](#demos) • [Getting started](#getting-started) • [API](#api) • [Deploy](#deploy) • [Project structure](#project-structure) • [Troubleshooting](#troubleshooting)
 
@@ -22,7 +22,7 @@ This project exposes a chat API that delegates tasks to a **LangGraph supervisor
 
 Typical flow: *"Research AI applied to business and email me the results"* → the research agent produces the content → the email agent sends it to the configured recipient.
 
-The Streamlit UI provides real-time chat, pre-built prompts, and the option to send to yourself or another address.
+The Next chat UI provides session chat, pre-built prompts, and the option to send to yourself or another address.
 
 ## Features
 
@@ -31,14 +31,14 @@ The Streamlit UI provides real-time chat, pre-built prompts, and the option to s
 - **Email sending** — SMTP with Gmail App Password; recipient set in the UI or in the message.
 - **Example prompts** — sidebar buttons to test summarization, drafting, and scheduling.
 - **Persistence** — user messages saved to PostgreSQL via SQLModel.
-- **Docker Compose** — backend, frontend, and database with hot-reload in development.
-- **Production deploy** — tested on DigitalOcean App Platform (backend + frontend + managed Postgres).
+- **Docker Compose** — api, web, and database with hot-reload in development.
+- **Production deploy** — tested on DigitalOcean App Platform (api + web + managed Postgres).
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    UI[Streamlit frontend] -->|POST /api/chats/| API[FastAPI]
+    UI[Next chat UI] -->|POST /api/chats/| API[FastAPI]
     Client[HTTP client] -->|POST /api/chats/| API
     API --> DB[(PostgreSQL)]
     API --> Supervisor[LangGraph supervisor]
@@ -59,7 +59,7 @@ flowchart TB
 | LLM | langchain-openai | Structured email generation |
 | Email | smtplib, IMAP | Send and read via Gmail |
 | Database | SQLModel, PostgreSQL | Chat message history |
-| UI | Streamlit | Chat, recipient settings, prompts |
+| UI | Next.js | Chat, recipient settings, prompts |
 | Containers | Docker Compose | Local orchestration and production base |
 
 ## Demos
@@ -125,7 +125,7 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `API_KEY` | Yes | Validated at backend startup |
+| `API_KEY` | Yes | Validated at api startup |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `OPENAI_MODEL_NAME` | No | Configurable default (e.g. `gpt-4o-mini`) |
@@ -135,7 +135,7 @@ cp .env.example .env
 | `EMAIL_HOST` | No | Default `smtp.gmail.com` |
 | `EMAIL_PORT` | No | Default `465` |
 | `EMAIL_SENDER_NAME` | No | Display name when signing emails |
-| `BACKEND_URL` | No | Backend URL for the frontend |
+| `BACKEND_URL` | No | Assistant URL for the chat UI |
 
 \* Required for email features.
 
@@ -147,30 +147,30 @@ docker compose up --build
 
 | Service | Local URL |
 |---------|-----------|
-| Frontend (Streamlit) | http://localhost:8501 |
-| Backend (FastAPI) | http://localhost:8080 |
+| Web (Next.js) | http://localhost:3000 |
+| API (FastAPI) | http://localhost:8080 |
 | PostgreSQL | localhost:5432 |
 
 > [!TIP]
-> Research + email flows can take **2+ minutes**. The frontend uses a 300 s timeout; configure reverse proxies with sufficient timeout in production.
+> Research + email flows can take **2+ minutes**. The chat UI uses a 300 s timeout; configure reverse proxies with sufficient timeout in production.
 
-### Backend development without Docker
+### API development without Docker
 
 ```bash
-cd backend/src
+cd api/src
 pip install -r ../requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 Ensure `DATABASE_URL` points to a running Postgres instance.
 
-### Local frontend (backend in Docker)
+### Local web UI (api in Docker)
 
 ```bash
-docker compose up backend db_service
-cd frontend
-pip install -r requirements.txt
-BACKEND_URL=http://localhost:8080 streamlit run app.py
+docker compose up api db_service
+cd web
+npm install
+BACKEND_URL=http://localhost:8080 npm run dev
 ```
 
 ## API
@@ -200,17 +200,17 @@ Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" `
 
 ## Deploy
 
-The project was successfully deployed on **DigitalOcean App Platform** as a Web App with three components: API (backend), interface (Streamlit), and managed PostgreSQL.
+The project was successfully deployed on **DigitalOcean App Platform** as a Web App with three components: API (`api`), interface (`web`), and managed PostgreSQL.
 
 ![Deploy completed on DigitalOcean](./images/deploy-digital-ocean.png)
 
-![Backend, frontend, and PostgreSQL in production](./images/interface_deploy_digital-ocean.png)
+![API, web, and PostgreSQL in production](./images/interface_deploy_digital-ocean.png)
 
-### Manual build (backend)
+### Manual build (api)
 
 ```bash
-docker build -t ai-agent-backend ./backend
-docker run -p 8000:8000 --env-file .env ai-agent-backend \
+docker build -t ai-agent-api ./api
+docker run -p 8000:8000 --env-file .env ai-agent-api \
   uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -218,24 +218,21 @@ docker run -p 8000:8000 --env-file .env ai-agent-backend \
 
 - Set all environment variables in your provider's dashboard.
 - Point `DATABASE_URL` to managed Postgres.
-- Start command: `uvicorn main:app --host 0.0.0.0 --port 8000` (backend) and `streamlit run app.py ...` (frontend).
+- Start command: `uvicorn main:app --host 0.0.0.0 --port 8000` (api) and `npm run start` (web).
 - Some hosts block SMTP on ports 465/587 — if sending fails in production but works locally, test SMTP connectivity from the container or switch to an HTTPS email API (Resend, SendGrid, etc.).
 
 > [!IMPORTANT]
-> The default `CMD` in `backend/Dockerfile` is `http.server`; in production, **always** override it with uvicorn (as in `compose.yaml`).
+> The default `CMD` in `api/Dockerfile` is `http.server`; in production, **always** override it with uvicorn (as in `compose.yaml`).
 
 ## Project structure
 
 ```
 .
-├── compose.yaml              # Backend + frontend + Postgres
+├── compose.yaml              # api + web + Postgres
 ├── .env.example              # Environment variable template (placeholders)
 ├── images/                   # Screenshots and demos
-├── frontend/
-│   ├── app.py                # Streamlit UI (chat, recipient, prompts)
-│   ├── api_client.py         # HTTP client for the API
-│   └── Dockerfile
-└── backend/
+├── web/                      # Next.js chat UI (App Router)
+└── api/
     ├── Dockerfile
     ├── requirements.txt
     └── src/
@@ -253,7 +250,7 @@ docker run -p 8000:8000 --env-file .env ai-agent-backend \
 |-------|---------------|
 | Email fails in production | SMTP blocked by host; container logs; TCP test on port 465 |
 | `API_KEY is not set` | Missing `API_KEY` in `.env` or deploy dashboard |
-| Frontend timeout | Long flows are normal; increase proxy timeout or wait up to 5 min |
+| Chat UI timeout | Long flows are normal; increase proxy timeout or wait up to 5 min |
 | Empty inbox | Correct App Password; IMAP enabled on Gmail account |
-| API connection error | Correct `BACKEND_URL`; backend online (`GET /api/chats/`) |
+| API connection error | Correct `BACKEND_URL`; api online (`GET /api/chats/`) |
 
