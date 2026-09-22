@@ -95,10 +95,10 @@ def send_me_email(
     )
 
 
-def _optional_recipient(to_email: str | None) -> str | None:
-    if to_email is None:
+def _optional_recipient(recipient: str | None) -> str | None:
+    if recipient is None:
         return None
-    stripped = to_email.strip()
+    stripped = recipient.strip()
     return stripped or None
 
 
@@ -107,7 +107,7 @@ def revise_email_draft(
     draft_id: str,
     subject: str,
     content: str,
-    to_email: str | None = None,
+    recipient: str | None = None,
 ) -> str:
     """Revise one open Draft in place. Do not use this to create a new email.
 
@@ -115,7 +115,7 @@ def revise_email_draft(
         draft_id: Id of the open Draft shown on the review card.
         subject: New subject, in the Draft's language unless the user asked for another.
         content: New plain-text body, revised from the body shown on the review card.
-        to_email: New Recipient. Omit unless the user asked to change the Recipient.
+        recipient: New Recipient. Omit unless the user asked to change the Recipient.
     """
     try:
         parsed_id = uuid.UUID(draft_id)
@@ -128,7 +128,7 @@ def revise_email_draft(
                 parsed_id,
                 subject=subject,
                 body=content,
-                recipient=_optional_recipient(to_email),
+                recipient=_optional_recipient(recipient),
                 sender_name=os.environ.get("EMAIL_SENDER_NAME"),
             )
     except Exception as e:

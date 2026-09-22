@@ -59,7 +59,7 @@ def prepare_assistant_outbound_email_body(
     return "\n".join(lines).strip()
 
 
-def prepare_outbound_email_body(raw: str) -> str:
+def _without_placeholders(raw: str) -> str:
     text = _PLACEHOLDER_PATTERN.sub("", raw)
     lines = text.splitlines()
     cleaned: list[str] = []
@@ -75,12 +75,31 @@ def prepare_outbound_email_body(raw: str) -> str:
     while cleaned and not cleaned[-1].strip():
         cleaned.pop()
 
-    if cleaned and _ORPHAN_CLOSING_LINES.match(cleaned[-1].strip()):
-        if len(cleaned) >= 2 and not cleaned[-2].strip():
-            cleaned.pop()
-        elif len(cleaned) == 1:
-            cleaned.pop()
-
     result = "\n".join(cleaned)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
+def prepare_confirmed_outbound_email_body(raw: str) -> str:
+    """Remove placeholder names and keep a farewell or name the human typed."""
+    return _without_placeholders(raw)
+
+
+def prepare_outbound_email_body(raw: str) -> str:
+    text = _without_placeholders(raw)
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    if lines and _ORPHAN_CLOSING_LINES.match(lines[-1].strip()):
+        if len(lines) >= 2 and not lines[-2].strip():
+            lines.pop()
+        elif len(lines) == 1:
+            lines.pop()
+
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    result = "\n".join(lines)
     result = re.sub(r"\n{3,}", "\n\n", result)
     return result.strip()

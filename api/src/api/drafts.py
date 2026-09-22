@@ -13,7 +13,7 @@ from sqlmodel import DateTime, Field, Session, SQLModel, col, select
 
 from api.ai.outbound_email_body import (
     prepare_assistant_outbound_email_body,
-    prepare_outbound_email_body,
+    prepare_confirmed_outbound_email_body,
 )
 from api.myemailer.recipient import resolve_recipient, validated_recipient
 
@@ -117,7 +117,7 @@ def confirm_draft(
 ) -> Draft:
     draft = _require_open_draft(session, draft_id)
 
-    prepared = prepare_outbound_email_body(body)
+    prepared = prepare_confirmed_outbound_email_body(body)
     resolved = validated_recipient(recipient)
 
     draft.subject = subject
@@ -212,17 +212,18 @@ def discard_open_drafts(session: Session) -> list[Draft]:
     return drafts
 
 
+def _prior_recipient_order(draft: Draft) -> tuple[int, float]:
+    if draft.confirmed_at is None:
+        return (1, 0.0)
+    return (0, -draft.confirmed_at.timestamp())
+
+
 def list_prior_recipients(session: Session) -> list[str]:
-    statement = (
-        select(Draft)
-        .where(col(Draft.state) == DRAFT_SENT)
-        .order_by(col(Draft.confirmed_at).desc())
-    )
+    statement = select(Draft).where(col(Draft.state) == DRAFT_SENT)
+    drafts = sorted(session.exec(statement).all(), key=_prior_recipient_order)
     seen: set[str] = set()
     recipients: list[str] = []
-    for draft in session.exec(statement).all():
-        if draft.confirmed_at is None:
-            continue
+    for draft in drafts:
         key = draft.recipient.casefold()
         if key in seen:
             continue

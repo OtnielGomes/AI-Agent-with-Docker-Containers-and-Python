@@ -251,7 +251,6 @@ export function ChatApp() {
       }
       setMessages([]);
       setReviewDrafts([]);
-      setChatInput("");
       persistedRecipients.current.clear();
       setFormError(null);
     } catch (error) {

@@ -37,7 +37,7 @@ _OPEN_DRAFT_RULES = (
     "One message may revise an identified Draft and create another when the user asks for both. "
     "Revise from the subject and body shown for that Draft, including edits on the card. "
     "Keep the Draft's language unless the user asks for another language. "
-    "Pass to_email to revise_email_draft only when the user asked to change the Recipient. "
+    "Pass recipient to revise_email_draft only when the user asked to change the Recipient. "
 )
 
 def get_email_agent():

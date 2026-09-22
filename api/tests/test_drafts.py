@@ -153,6 +153,27 @@ def test_confirm_keeps_a_human_typed_name_and_a_body_without_an_opening(session)
     ]
 
 
+def test_confirm_keeps_a_human_farewell(session):
+    draft = _open_draft(session)
+    card_body = "Here is the note.\n\nBest regards"
+    sent: list[dict] = []
+
+    def fake_send_mail(*, subject, content, to_email):
+        sent.append({"subject": subject, "content": content, "to_email": to_email})
+
+    result = confirm_draft(
+        session,
+        draft.id,
+        subject="A note",
+        body=card_body,
+        recipient="named@example.com",
+        send_mail=fake_send_mail,
+    )
+
+    assert result.body == card_body
+    assert sent[0]["content"] == card_body
+
+
 def test_confirm_strips_placeholder_from_edited_body_before_smtp(session):
     draft = _open_draft(session)
     sent: list[dict] = []
@@ -483,6 +504,37 @@ def test_prior_recipients_keep_one_address_using_the_latest_spelling(session):
     )
 
     assert list_prior_recipients(session) == ["pat@example.com"]
+
+
+def test_prior_recipients_include_a_sent_address_with_no_confirm_time(session):
+    dated = create_open_draft(
+        session,
+        subject="Dated",
+        body="Dated body",
+        pinned=None,
+        named="dated@example.com",
+        default="default@example.com",
+    )
+    _confirm(
+        session,
+        dated,
+        subject="Dated",
+        body="Dated body",
+        recipient="dated@example.com",
+    )
+    legacy = Draft(
+        subject="Legacy",
+        body="Legacy body",
+        recipient="legacy@example.com",
+        state="sent",
+    )
+    session.add(legacy)
+    session.commit()
+
+    assert list_prior_recipients(session) == [
+        "dated@example.com",
+        "legacy@example.com",
+    ]
 
 
 def test_prior_recipients_omit_open_and_discarded_drafts(session):
