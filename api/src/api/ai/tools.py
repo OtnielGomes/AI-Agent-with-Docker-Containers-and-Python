@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Annotated
 
 from langchain_core.runnables import RunnableConfig
@@ -10,7 +11,7 @@ from sqlmodel import Session
 
 from api.ai.services import generate_email_message
 from api.db import engine
-from api.drafts import create_open_draft
+from api.drafts import create_open_draft, revise_open_draft
 from api.myemailer.inbox_reader import read_inbox
 
 
@@ -84,11 +85,56 @@ def send_me_email(
                 pinned=pinned,
                 named=to_email,
                 default=os.environ.get("EMAIL_ADDRESS"),
+                sender_name=os.environ.get("EMAIL_SENDER_NAME"),
             )
     except Exception as e:
         return f"Error creating email draft: {e}"
     return (
         f"Draft created for {draft.recipient} with subject {draft.subject}. "
+        "It will be sent only after the human confirms it in the chat UI."
+    )
+
+
+def _optional_recipient(to_email: str | None) -> str | None:
+    if to_email is None:
+        return None
+    stripped = to_email.strip()
+    return stripped or None
+
+
+@tool
+def revise_email_draft(
+    draft_id: str,
+    subject: str,
+    content: str,
+    to_email: str | None = None,
+) -> str:
+    """Revise one open Draft in place. Do not use this to create a new email.
+
+    Args:
+        draft_id: Id of the open Draft shown on the review card.
+        subject: New subject, in the Draft's language unless the user asked for another.
+        content: New plain-text body, revised from the body shown on the review card.
+        to_email: New Recipient. Omit unless the user asked to change the Recipient.
+    """
+    try:
+        parsed_id = uuid.UUID(draft_id)
+    except ValueError:
+        return f"Error revising email draft: invalid id {draft_id}"
+    try:
+        with Session(engine) as session:
+            draft = revise_open_draft(
+                session,
+                parsed_id,
+                subject=subject,
+                body=content,
+                recipient=_optional_recipient(to_email),
+                sender_name=os.environ.get("EMAIL_SENDER_NAME"),
+            )
+    except Exception as e:
+        return f"Error revising email draft: {e}"
+    return (
+        f"Draft revised for {draft.recipient} with subject {draft.subject}. "
         "It will be sent only after the human confirms it in the chat UI."
     )
 

@@ -12,7 +12,10 @@ from api.drafts import (
     confirm_draft,
     create_open_draft,
     discard_draft,
+    discard_open_drafts,
     list_open_drafts,
+    list_prior_recipients,
+    revise_open_draft,
 )
 
 
@@ -52,6 +55,20 @@ def test_create_lets_pinned_recipient_win(session):
     )
 
     assert draft.recipient == "pinned@example.com"
+
+
+def test_create_drops_trailing_sender_name_and_placeholder(session):
+    draft = create_open_draft(
+        session,
+        subject="Nota",
+        body="Olá,\n\nSegue a nota.\n\nAté mais!\nMaria Silva\n[Seu nome]",
+        pinned=None,
+        named="named@example.com",
+        default="default@example.com",
+        sender_name="Maria Silva",
+    )
+
+    assert draft.body == "Olá,\n\nSegue a nota.\n\nAté mais!"
 
 
 def test_create_rejects_invalid_named_recipient_without_persisting(session):
@@ -107,6 +124,33 @@ def test_confirm_sends_current_card_fields_via_smtp_and_marks_sent(session):
         }
     ]
     assert session.get(Draft, draft.id).state == "sent"
+
+
+def test_confirm_keeps_a_human_typed_name_and_a_body_without_an_opening(session):
+    draft = _open_draft(session)
+    card_body = "Here is the note.\n\nTalk soon!\nOtniel Gomes"
+    sent: list[dict] = []
+
+    def fake_send_mail(*, subject, content, to_email):
+        sent.append({"subject": subject, "content": content, "to_email": to_email})
+
+    result = confirm_draft(
+        session,
+        draft.id,
+        subject="A note",
+        body=card_body,
+        recipient="named@example.com",
+        send_mail=fake_send_mail,
+    )
+
+    assert result.body == card_body
+    assert sent == [
+        {
+            "subject": "A note",
+            "content": card_body,
+            "to_email": "named@example.com",
+        }
+    ]
 
 
 def test_confirm_strips_placeholder_from_edited_body_before_smtp(session):
@@ -324,6 +368,340 @@ def test_multiple_drafts_are_confirmed_and_discarded_independently(session):
     assert session.get(Draft, first.id).state == "discarded"
     assert session.get(Draft, second.id).state == "sent"
     assert sent == ["second@example.com"]
+
+
+def _confirm(session, draft: Draft, *, subject: str, body: str, recipient: str) -> Draft:
+    return confirm_draft(
+        session,
+        draft.id,
+        subject=subject,
+        body=body,
+        recipient=recipient,
+        send_mail=lambda **kwargs: None,
+    )
+
+
+def test_confirm_records_the_time_only_after_a_successful_send(session):
+    draft = _open_draft(session)
+
+    def boom(*, subject, content, to_email):
+        raise RuntimeError("smtp down")
+
+    with pytest.raises(RuntimeError, match="smtp down"):
+        confirm_draft(
+            session,
+            draft.id,
+            subject="Edited subject",
+            body="Edited body",
+            recipient="edited@example.com",
+            send_mail=boom,
+        )
+
+    failed = session.get(Draft, draft.id)
+    assert failed.state == "open"
+    assert failed.confirmed_at is None
+
+    sent = _confirm(
+        session,
+        failed,
+        subject="Edited subject",
+        body="Edited body",
+        recipient="edited@example.com",
+    )
+    assert sent.state == "sent"
+    assert sent.confirmed_at is not None
+
+
+def test_prior_recipients_are_sent_addresses_newest_confirm_first(session):
+    older = create_open_draft(
+        session,
+        subject="Older",
+        body="Older body",
+        pinned=None,
+        named="older@example.com",
+        default="default@example.com",
+    )
+    newer = create_open_draft(
+        session,
+        subject="Newer",
+        body="Newer body",
+        pinned=None,
+        named="newer@example.com",
+        default="default@example.com",
+    )
+    _confirm(
+        session,
+        older,
+        subject="Older",
+        body="Older body",
+        recipient="older@example.com",
+    )
+    _confirm(
+        session,
+        newer,
+        subject="Newer",
+        body="Newer body",
+        recipient="newer@example.com",
+    )
+
+    assert list_prior_recipients(session) == [
+        "newer@example.com",
+        "older@example.com",
+    ]
+
+
+def test_prior_recipients_keep_one_address_using_the_latest_spelling(session):
+    first = create_open_draft(
+        session,
+        subject="First",
+        body="First body",
+        pinned=None,
+        named="Pat@Example.com",
+        default="default@example.com",
+    )
+    second = create_open_draft(
+        session,
+        subject="Second",
+        body="Second body",
+        pinned=None,
+        named="other@example.com",
+        default="default@example.com",
+    )
+    _confirm(
+        session,
+        first,
+        subject="First",
+        body="First body",
+        recipient="Pat@Example.com",
+    )
+    _confirm(
+        session,
+        second,
+        subject="Second",
+        body="Second body",
+        recipient="pat@example.com",
+    )
+
+    assert list_prior_recipients(session) == ["pat@example.com"]
+
+
+def test_prior_recipients_omit_open_and_discarded_drafts(session):
+    open_draft = _open_draft(session)
+    discarded = create_open_draft(
+        session,
+        subject="Gone",
+        body="Gone body",
+        pinned=None,
+        named="gone@example.com",
+        default="default@example.com",
+    )
+    discard_draft(session, discarded.id)
+
+    assert open_draft.state == "open"
+    assert list_prior_recipients(session) == []
+
+
+def test_discard_open_drafts_discards_every_open_draft_and_leaves_the_rest(session):
+    first = _open_draft(session, body="First open")
+    second = create_open_draft(
+        session,
+        subject="Second",
+        body="Second open",
+        pinned=None,
+        named="second@example.com",
+        default="default@example.com",
+    )
+    sent = create_open_draft(
+        session,
+        subject="Sent",
+        body="Already sent",
+        pinned=None,
+        named="sent@example.com",
+        default="default@example.com",
+    )
+    already_discarded = create_open_draft(
+        session,
+        subject="Discarded",
+        body="Already discarded",
+        pinned=None,
+        named="old@example.com",
+        default="default@example.com",
+    )
+    confirm_draft(
+        session,
+        sent.id,
+        subject="Sent",
+        body="Already sent",
+        recipient="sent@example.com",
+        send_mail=lambda **kwargs: None,
+    )
+    discard_draft(session, already_discarded.id)
+
+    discarded = discard_open_drafts(session)
+
+    assert {item.id for item in discarded} == {first.id, second.id}
+    assert session.get(Draft, first.id).state == "discarded"
+    assert session.get(Draft, second.id).state == "discarded"
+    assert session.get(Draft, sent.id).state == "sent"
+    assert session.get(Draft, already_discarded.id).state == "discarded"
+    assert list_open_drafts(session) == []
+
+
+def test_second_discard_open_drafts_finds_nothing_open(session):
+    draft = _open_draft(session)
+    discard_open_drafts(session)
+
+    again = discard_open_drafts(session)
+
+    assert again == []
+    assert session.get(Draft, draft.id).state == "discarded"
+    assert list_open_drafts(session) == []
+
+
+def test_revise_updates_subject_and_body_and_keeps_id_open_state_and_recipient(session):
+    draft = _open_draft(session)
+
+    revised = revise_open_draft(
+        session,
+        draft.id,
+        subject="Shorter subject",
+        body="Shorter body.",
+    )
+
+    assert revised.id == draft.id
+    assert revised.state == "open"
+    assert revised.subject == "Shorter subject"
+    assert revised.body == "Shorter body."
+    assert revised.recipient == "named@example.com"
+    stored = session.get(Draft, draft.id)
+    assert stored.subject == "Shorter subject"
+    assert stored.body == "Shorter body."
+    assert stored.recipient == "named@example.com"
+    assert stored.state == "open"
+
+
+def test_revise_drops_trailing_sender_name_so_the_closing_is_last(session):
+    draft = _open_draft(session)
+
+    revised = revise_open_draft(
+        session,
+        draft.id,
+        subject="Nota",
+        body="Hello,\n\nThe note.\n\nTalk soon!\nMaria Silva",
+        sender_name="Maria Silva",
+    )
+
+    assert revised.body == "Hello,\n\nThe note.\n\nTalk soon!"
+    assert session.get(Draft, draft.id).body == "Hello,\n\nThe note.\n\nTalk soon!"
+
+
+def test_revise_replaces_recipient_when_one_is_supplied(session):
+    draft = _open_draft(session)
+
+    revised = revise_open_draft(
+        session,
+        draft.id,
+        subject="AI research",
+        body="Here is the research.",
+        recipient="new@example.com",
+    )
+
+    assert revised.recipient == "new@example.com"
+    assert session.get(Draft, draft.id).recipient == "new@example.com"
+
+
+def test_revise_rejects_invalid_recipient_and_creates_nothing(session):
+    draft = _open_draft(session)
+
+    with pytest.raises(ValueError, match="Invalid recipient email"):
+        revise_open_draft(
+            session,
+            draft.id,
+            subject="Changed",
+            body="Changed body.",
+            recipient="not-an-email",
+        )
+
+    stored = session.get(Draft, draft.id)
+    assert stored.subject == "AI research"
+    assert stored.body == "Here is the research."
+    assert stored.recipient == "named@example.com"
+    assert stored.state == "open"
+    assert [item.id for item in session.exec(select(Draft)).all()] == [draft.id]
+
+
+def test_revise_sent_or_discarded_or_missing_draft_changes_nothing(session):
+    sent = _open_draft(session, body="Sent body")
+    confirm_draft(
+        session,
+        sent.id,
+        subject="AI research",
+        body="Sent body",
+        recipient="named@example.com",
+        send_mail=lambda **kwargs: None,
+    )
+    discarded = create_open_draft(
+        session,
+        subject="Gone",
+        body="Gone body",
+        pinned=None,
+        named="gone@example.com",
+        default="default@example.com",
+    )
+    discard_draft(session, discarded.id)
+    missing_id = uuid.uuid4()
+
+    with pytest.raises(DraftNotOpenError):
+        revise_open_draft(session, sent.id, subject="Nope", body="Nope")
+    with pytest.raises(DraftNotOpenError):
+        revise_open_draft(session, discarded.id, subject="Nope", body="Nope")
+    with pytest.raises(DraftNotFoundError):
+        revise_open_draft(session, missing_id, subject="Nope", body="Nope")
+
+    assert session.get(Draft, sent.id).subject == "AI research"
+    assert session.get(Draft, sent.id).state == "sent"
+    assert session.get(Draft, discarded.id).subject == "Gone"
+    assert session.get(Draft, discarded.id).state == "discarded"
+    assert session.get(Draft, missing_id) is None
+    assert len(session.exec(select(Draft)).all()) == 2
+
+
+def test_revise_is_returned_with_the_turn_drafts(session):
+    draft = _open_draft(session)
+    with collecting_created_drafts() as drafts:
+        revise_open_draft(
+            session,
+            draft.id,
+            subject="Short",
+            body="Short body.",
+        )
+
+    assert [item.id for item in drafts] == [draft.id]
+    assert drafts[0].subject == "Short"
+    assert drafts[0].body == "Short body."
+    assert drafts[0].state == "open"
+
+
+def test_revise_replaces_a_draft_created_in_the_same_turn(session):
+    with collecting_created_drafts() as drafts:
+        created = create_open_draft(
+            session,
+            subject="Original",
+            body="Original body",
+            pinned=None,
+            named="named@example.com",
+            default="default@example.com",
+        )
+        revise_open_draft(
+            session,
+            created.id,
+            subject="Revised",
+            body="Revised body.",
+        )
+
+    assert [item.id for item in drafts] == [created.id]
+    assert drafts[0].subject == "Revised"
+    assert drafts[0].body == "Revised body."
 
 
 def test_discard_fails_when_draft_is_already_sent(session):

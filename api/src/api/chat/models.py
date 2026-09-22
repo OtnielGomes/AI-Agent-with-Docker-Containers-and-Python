@@ -7,10 +7,18 @@ from datetime import datetime, timezone
 def get_utc_now():
     return datetime.now().replace(tzinfo=timezone.utc)
 
+class OpenDraftSnapshot(SQLModel):
+    id: str
+    subject: str
+    body: str
+    recipient: str
+
+
 # Validation
 class ChatMenssagePayload(SQLModel):
     message: str
     to_email: str | None = None
+    open_drafts: list[OpenDraftSnapshot] = Field(default_factory=list)
 
 # Saving, getting,updating, deleting:
 class ChatMessage(SQLModel, table=True):

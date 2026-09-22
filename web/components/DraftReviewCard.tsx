@@ -9,12 +9,14 @@ type DraftReviewCardProps = {
   draft: DraftCard;
   backendUrl: string;
   onChange: (draft: DraftCard) => void;
+  onResolved: (draft: DraftCard) => void;
 };
 
 export function DraftReviewCard({
   draft,
   backendUrl,
   onChange,
+  onResolved,
 }: DraftReviewCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
@@ -48,7 +50,7 @@ export function DraftReviewCard({
         setError(data.error ?? "Confirm failed.");
         return;
       }
-      onChange(data);
+      onResolved(data);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Confirm failed.");
     } finally {
@@ -75,7 +77,7 @@ export function DraftReviewCard({
         setError(data.error ?? "Discard failed.");
         return;
       }
-      onChange(data);
+      onResolved(data);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Discard failed.");
     } finally {

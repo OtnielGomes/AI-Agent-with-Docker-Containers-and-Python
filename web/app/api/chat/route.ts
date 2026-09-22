@@ -2,7 +2,36 @@ import {
   AssistantError,
   resolveBackendUrl,
   sendChatMessage,
+  type OpenDraftSnapshot,
 } from "@/lib/assistant";
+
+function openDraftSnapshots(raw: unknown): OpenDraftSnapshot[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const draft = item as Record<string, unknown>;
+    if (
+      typeof draft.id !== "string" ||
+      typeof draft.subject !== "string" ||
+      typeof draft.body !== "string" ||
+      typeof draft.recipient !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: draft.id,
+        subject: draft.subject,
+        body: draft.body,
+        recipient: draft.recipient,
+      },
+    ];
+  });
+}
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -12,6 +41,7 @@ export async function POST(request: Request) {
     message?: unknown;
     to_email?: unknown;
     backendUrl?: unknown;
+    open_drafts?: unknown;
   };
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message) {
@@ -30,6 +60,7 @@ export async function POST(request: Request) {
       resolveBackendUrl(override),
       message,
       pinnedRecipient,
+      openDraftSnapshots(body.open_drafts),
     );
     return Response.json(result);
   } catch (error) {

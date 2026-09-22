@@ -35,15 +35,17 @@ def test_prepare_keeps_already_clean_body():
     assert prepare_outbound_email_body(raw) == raw
 
 
-def test_generation_hint_without_sender_name_forbids_placeholders_and_invented_signature():
+def test_generation_hint_without_sender_name_forbids_placeholders_and_a_signature():
     hint = outbound_email_body_generation_hint("")
     assert "[Seu nome]" in hint
     assert "[Your name]" in hint
     assert "[Nome]" in hint
-    assert "Do not add a signature name unless the user explicitly provides one." in hint
+    assert "Do not add a signature name." in hint
+    assert "A configured sender name (none) is not written after the Closing." in hint
 
 
-def test_generation_hint_with_sender_name_allows_only_that_name():
+def test_generation_hint_with_sender_name_still_forbids_a_signature():
     hint = outbound_email_body_generation_hint("Maria Silva")
-    assert "If you sign the email, use only this name: Maria Silva." in hint
-    assert "Do not add a signature name unless the user explicitly provides one." not in hint
+    assert "Do not add a signature name." in hint
+    assert "A configured sender name (Maria Silva) is not written after the Closing." in hint
+    assert "If you sign the email, use only this name" not in hint

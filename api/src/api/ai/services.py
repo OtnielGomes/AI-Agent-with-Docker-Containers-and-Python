@@ -14,7 +14,6 @@ def _email_composition_system_prompt() -> str:
     sender_name = os.environ.get("EMAIL_SENDER_NAME", "").strip()
     return (
         "You are a helpful assistant for research and composing plain text emails. "
-        "Match the user's language (use Brazilian Portuguese when they write in Portuguese). "
         "Do not use markdown — plain text only. "
         f"{outbound_email_body_generation_hint(sender_name)}"
     )

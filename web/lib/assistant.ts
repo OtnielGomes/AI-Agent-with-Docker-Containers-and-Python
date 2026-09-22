@@ -118,12 +118,24 @@ export async function checkAssistantHealth(baseUrl: string): Promise<boolean> {
   }
 }
 
+export type OpenDraftSnapshot = {
+  id: string;
+  subject: string;
+  body: string;
+  recipient: string;
+};
+
 export async function sendChatMessage(
   baseUrl: string,
   message: string,
   pinnedRecipient?: string | null,
+  openDrafts: OpenDraftSnapshot[] = [],
 ): Promise<ChatTurnResponse> {
-  const payload: { message: string; to_email?: string } = { message };
+  const payload: {
+    message: string;
+    to_email?: string;
+    open_drafts: OpenDraftSnapshot[];
+  } = { message, open_drafts: openDrafts };
   if (pinnedRecipient) {
     payload.to_email = pinnedRecipient;
   }
@@ -243,6 +255,61 @@ export async function discardDraft(
     throw new AssistantError("Backend response missing a Draft.");
   }
   return parsed;
+}
+
+export async function discardOpenDrafts(baseUrl: string): Promise<DraftCard[]> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${baseUrl}/api/drafts/discard-open`,
+      { method: "POST" },
+      DRAFT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw connectionError(error, "Discard timed out.");
+  }
+
+  if (!response.ok) {
+    throw await readAssistantError(response);
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new AssistantError("Invalid JSON response from backend.");
+  }
+
+  return parseDrafts(data);
+}
+
+export async function listPriorRecipients(baseUrl: string): Promise<string[]> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${baseUrl}/api/drafts/prior-recipients`,
+      {},
+      DRAFT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw connectionError(error, "Could not load prior recipients.");
+  }
+
+  if (!response.ok) {
+    throw await readAssistantError(response);
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new AssistantError("Invalid JSON response from backend.");
+  }
+
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data.filter((item): item is string => typeof item === "string");
 }
 
 export async function listOpenDrafts(baseUrl: string): Promise<DraftCard[]> {

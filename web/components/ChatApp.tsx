@@ -9,12 +9,28 @@ import { DraftReviewCard } from "@/components/DraftReviewCard";
 type ChatRole = "user" | "assistant";
 type ChatTurn = { role: ChatRole; content: string };
 
-function mergeDrafts(current: DraftCard[], incoming: DraftCard[]): DraftCard[] {
-  const byId = new Map(current.map((draft) => [draft.id, draft]));
+function applyTurnDrafts(
+  current: DraftCard[],
+  incoming: DraftCard[],
+  persistedRecipients: Map<string, string>,
+): DraftCard[] {
+  const next = [...current];
   for (const draft of incoming) {
-    byId.set(draft.id, draft);
+    const index = next.findIndex((item) => item.id === draft.id);
+    if (index === -1) {
+      persistedRecipients.set(draft.id, draft.recipient);
+      next.push(draft);
+      continue;
+    }
+    const storedRecipient = persistedRecipients.get(draft.id);
+    if (storedRecipient !== undefined && draft.recipient === storedRecipient) {
+      next[index] = { ...draft, recipient: next[index].recipient };
+      continue;
+    }
+    persistedRecipients.set(draft.id, draft.recipient);
+    next[index] = draft;
   }
-  return [...byId.values()];
+  return next;
 }
 
 const EXAMPLE_PROMPTS = [
@@ -31,10 +47,13 @@ export function ChatApp() {
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [sendToSelf, setSendToSelf] = useState(true);
   const [otherRecipientEmail, setOtherRecipientEmail] = useState("");
+  const [priorRecipients, setPriorRecipients] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const persistedRecipients = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -50,11 +69,13 @@ export function ChatApp() {
         if (!cancelled) {
           await refreshHealth(url || undefined);
           await loadOpenDrafts(url || undefined);
+          await loadPriorRecipients(url || undefined);
         }
       } catch {
         if (!cancelled) {
           await refreshHealth();
           await loadOpenDrafts();
+          await loadPriorRecipients();
         }
       }
     }
@@ -82,6 +103,9 @@ export function ChatApp() {
       });
       const data = (await response.json()) as { drafts?: DraftCard[] };
       if (response.ok && Array.isArray(data.drafts)) {
+        for (const draft of data.drafts) {
+          persistedRecipients.current.set(draft.id, draft.recipient);
+        }
         setReviewDrafts(data.drafts);
       }
     } catch {
@@ -108,6 +132,27 @@ export function ChatApp() {
     }
   }
 
+  async function loadPriorRecipients(url?: string) {
+    const override = (url ?? backendUrl).trim();
+    try {
+      const query = override
+        ? `?backendUrl=${encodeURIComponent(override)}`
+        : "";
+      const response = await fetch(`/api/drafts/prior-recipients${query}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(8_000),
+      });
+      const data = (await response.json()) as { recipients?: string[] };
+      if (response.ok && Array.isArray(data.recipients)) {
+        setPriorRecipients(
+          data.recipients.filter((item) => typeof item === "string"),
+        );
+      }
+    } catch {
+      // Typing a new address still works when suggestions cannot be loaded.
+    }
+  }
+
   function selectedRecipient(): string | null {
     if (sendToSelf) {
       return null;
@@ -118,7 +163,7 @@ export function ChatApp() {
 
   async function handleUserMessage(userText: string) {
     const text = userText.trim();
-    if (!text || isSending) {
+    if (!text || isSending || isClearing) {
       return;
     }
 
@@ -149,6 +194,14 @@ export function ChatApp() {
           message: text,
           ...(backendUrl.trim() ? { backendUrl: backendUrl.trim() } : {}),
           ...(pinned ? { to_email: pinned } : {}),
+          open_drafts: reviewDrafts
+            .filter((draft) => draft.state === "open")
+            .map((draft) => ({
+              id: draft.id,
+              subject: draft.subject,
+              body: draft.body,
+              recipient: draft.recipient,
+            })),
         }),
       });
       const data = (await response.json()) as {
@@ -171,9 +224,41 @@ export function ChatApp() {
       { role: "assistant", content: reply },
     ]);
     if (drafts.length > 0) {
-      setReviewDrafts((current) => mergeDrafts(current, drafts));
+      setReviewDrafts((current) =>
+        applyTurnDrafts(current, drafts, persistedRecipients.current),
+      );
     }
     setIsSending(false);
+  }
+
+  async function handleClearChat() {
+    if (isClearing || isSending) {
+      return;
+    }
+    setIsClearing(true);
+    try {
+      const response = await fetch("/api/drafts/discard-open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          backendUrl.trim() ? { backendUrl: backendUrl.trim() } : {},
+        ),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        setFormError(data.error ?? "Discard failed.");
+        return;
+      }
+      setMessages([]);
+      setReviewDrafts([]);
+      setChatInput("");
+      persistedRecipients.current.clear();
+      setFormError(null);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Discard failed.");
+    } finally {
+      setIsClearing(false);
+    }
   }
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -185,6 +270,13 @@ export function ChatApp() {
     !sendToSelf &&
     otherRecipientEmail.trim().length > 0 &&
     !isValidEmail(otherRecipientEmail);
+  const typedRecipient = otherRecipientEmail.trim();
+  const recipientSuggestions =
+    sendToSelf || typedRecipient.length === 0
+      ? []
+      : priorRecipients.filter((address) =>
+          address.toLowerCase().includes(typedRecipient.toLowerCase()),
+        );
 
   return (
     <div className="flex min-h-full bg-zinc-50 text-zinc-900">
@@ -240,6 +332,7 @@ export function ChatApp() {
                 setSendToSelf(!event.target.checked);
                 if (event.target.checked) {
                   setFormError(null);
+                  void loadPriorRecipients();
                 }
               }}
             />
@@ -267,6 +360,24 @@ export function ChatApp() {
               ) : null}
             </label>
           )}
+          {recipientSuggestions.length > 0 ? (
+            <ul
+              className="mt-2 flex flex-col overflow-hidden rounded-md border border-zinc-700"
+              aria-label="Prior recipients"
+            >
+              {recipientSuggestions.map((address) => (
+                <li key={address}>
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+                    onClick={() => setOtherRecipientEmail(address)}
+                  >
+                    {address}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
 
         <div>
@@ -278,7 +389,7 @@ export function ChatApp() {
                 type="button"
                 className="rounded-md border border-zinc-700 px-3 py-2 text-left text-sm text-zinc-200 hover:border-teal-400 hover:text-white"
                 onClick={() => void handleUserMessage(prompt)}
-                disabled={isSending}
+                disabled={isSending || isClearing}
               >
                 {prompt}
               </button>
@@ -289,12 +400,10 @@ export function ChatApp() {
         <button
           type="button"
           className="mt-auto rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:border-rose-400 hover:text-rose-300"
-          onClick={() => {
-            setMessages([]);
-            setFormError(null);
-          }}
+          onClick={() => void handleClearChat()}
+          disabled={isClearing || isSending}
         >
-          Clear chat
+          {isClearing ? "Clearing…" : "Clear chat"}
         </button>
       </aside>
 
@@ -367,6 +476,17 @@ export function ChatApp() {
                       ),
                     );
                   }}
+                  onResolved={(next) => {
+                    persistedRecipients.current.set(next.id, next.recipient);
+                    setReviewDrafts((current) =>
+                      current.map((existing) =>
+                        existing.id === next.id ? next : existing,
+                      ),
+                    );
+                    if (next.state === "sent") {
+                      void loadPriorRecipients();
+                    }
+                  }}
                 />
               ))}
             </div>
@@ -394,13 +514,13 @@ export function ChatApp() {
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
               placeholder="Ask the agent..."
-              disabled={isSending}
+              disabled={isSending || isClearing}
               aria-label="Chat message"
             />
             <button
               type="submit"
               className="rounded-xl bg-zinc-950 px-5 py-3 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
-              disabled={isSending || !chatInput.trim()}
+              disabled={isSending || isClearing || !chatInput.trim()}
             >
               Send
             </button>

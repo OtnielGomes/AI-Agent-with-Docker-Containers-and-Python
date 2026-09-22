@@ -11,7 +11,10 @@ from typing import Any
 
 from sqlmodel import DateTime, Field, Session, SQLModel, col, select
 
-from api.ai.outbound_email_body import prepare_outbound_email_body
+from api.ai.outbound_email_body import (
+    prepare_assistant_outbound_email_body,
+    prepare_outbound_email_body,
+)
 from api.myemailer.recipient import resolve_recipient, validated_recipient
 
 DRAFT_OPEN = "open"
@@ -46,6 +49,11 @@ class Draft(SQLModel, table=True):
         sa_type=DateTime(timezone=True),
         nullable=False,
     )
+    confirmed_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 _created_in_turn: ContextVar[list[Draft] | None] = ContextVar(
@@ -62,6 +70,17 @@ def _require_open_draft(session: Session, draft_id: uuid.UUID) -> Draft:
     return draft
 
 
+def _record_turn_draft(draft: Draft) -> None:
+    bucket = _created_in_turn.get()
+    if bucket is None:
+        return
+    for index, item in enumerate(bucket):
+        if item.id == draft.id:
+            bucket[index] = draft
+            return
+    bucket.append(draft)
+
+
 def create_open_draft(
     session: Session,
     *,
@@ -70,9 +89,10 @@ def create_open_draft(
     pinned: str | None,
     named: str | None,
     default: str | None,
+    sender_name: str | None = None,
 ) -> Draft:
     recipient = resolve_recipient(pinned=pinned, named=named, default=default)
-    prepared = prepare_outbound_email_body(body)
+    prepared = prepare_assistant_outbound_email_body(body, sender_name)
     draft = Draft(
         subject=subject,
         body=prepared,
@@ -82,9 +102,7 @@ def create_open_draft(
     session.add(draft)
     session.commit()
     session.refresh(draft)
-    bucket = _created_in_turn.get()
-    if bucket is not None:
-        bucket.append(draft)
+    _record_turn_draft(draft)
     return draft
 
 
@@ -112,6 +130,7 @@ def confirm_draft(
     send_mail(subject=subject, content=prepared, to_email=resolved)
 
     draft.state = DRAFT_SENT
+    draft.confirmed_at = _utc_now()
     session.add(draft)
     session.commit()
     session.refresh(draft)
@@ -153,6 +172,63 @@ def discard_draft(session: Session, draft_id: uuid.UUID) -> Draft:
     session.commit()
     session.refresh(draft)
     return draft
+
+
+def revise_open_draft(
+    session: Session,
+    draft_id: uuid.UUID,
+    *,
+    subject: str,
+    body: str,
+    recipient: str | None = None,
+    sender_name: str | None = None,
+) -> Draft:
+    draft = _require_open_draft(session, draft_id)
+    resolved = validated_recipient(recipient) if recipient is not None else None
+    prepared = prepare_assistant_outbound_email_body(body, sender_name)
+
+    draft.subject = subject
+    draft.body = prepared
+    if resolved is not None:
+        draft.recipient = resolved
+    session.add(draft)
+    session.commit()
+    session.refresh(draft)
+    _record_turn_draft(draft)
+    return draft
+
+
+def discard_open_drafts(session: Session) -> list[Draft]:
+    drafts = list_open_drafts(session)
+    if not drafts:
+        return []
+
+    for draft in drafts:
+        draft.state = DRAFT_DISCARDED
+        session.add(draft)
+    session.commit()
+    for draft in drafts:
+        session.refresh(draft)
+    return drafts
+
+
+def list_prior_recipients(session: Session) -> list[str]:
+    statement = (
+        select(Draft)
+        .where(col(Draft.state) == DRAFT_SENT)
+        .order_by(col(Draft.confirmed_at).desc())
+    )
+    seen: set[str] = set()
+    recipients: list[str] = []
+    for draft in session.exec(statement).all():
+        if draft.confirmed_at is None:
+            continue
+        key = draft.recipient.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        recipients.append(draft.recipient)
+    return recipients
 
 
 def list_open_drafts(session: Session) -> list[Draft]:

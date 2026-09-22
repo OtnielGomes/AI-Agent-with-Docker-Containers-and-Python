@@ -5,13 +5,39 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session,select
 
 
-from .models import ChatMenssagePayload, ChatMessage, ChatMessage_listItem
+from .models import (
+    ChatMenssagePayload,
+    ChatMessage,
+    ChatMessage_listItem,
+    OpenDraftSnapshot,
+)
 from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
 from api.ai.schemas import SupervisorMessageSchema
 from api.drafts import chat_turn_payload, collecting_created_drafts
 from api.myemailer.recipient import validated_recipient
+
+def _with_open_drafts(message: str, open_drafts: list[OpenDraftSnapshot]) -> str:
+    """Give the model the review cards for this turn, oldest first."""
+    if not open_drafts:
+        return f"{message}\n\nOpen Drafts on the review cards: none."
+
+    blocks: list[str] = []
+    for index, draft in enumerate(open_drafts, start=1):
+        blocks.append(
+            f"{index}. id: {draft.id}\n"
+            f"subject: {draft.subject}\n"
+            f"recipient: {draft.recipient}\n"
+            f"body:\n{draft.body}"
+        )
+    listed = "\n\n".join(blocks)
+    return (
+        f"{message}\n\n"
+        "Open Drafts on the review cards, oldest at the top:\n\n"
+        f"{listed}"
+    )
+
 
 # Router:
 router = APIRouter()
@@ -60,7 +86,7 @@ def chat_create_message(
     else:
         pin = None
 
-    data = payload.model_dump(exclude={"to_email"})
+    data = payload.model_dump(exclude={"to_email", "open_drafts"})
     obj = ChatMessage.model_validate(data)
     session.add(obj)
     session.commit()
@@ -70,7 +96,7 @@ def chat_create_message(
         "messages": [
             {
                 "role": "user",
-                "content": payload.message,
+                "content": _with_open_drafts(payload.message, payload.open_drafts),
             },
         ]
     }

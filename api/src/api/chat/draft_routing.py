@@ -9,8 +9,10 @@ from api.drafts import (
     DraftNotOpenError,
     confirm_draft,
     discard_draft,
+    discard_open_drafts,
     draft_as_chat_item,
     list_open_drafts,
+    list_prior_recipients,
 )
 from api.myemailer.sender import send_mail
 
@@ -26,6 +28,16 @@ class ConfirmDraftPayload(SQLModel):
 @router.get("/")
 def get_open_drafts(session: Session = Depends(get_session)):
     return [draft_as_chat_item(draft) for draft in list_open_drafts(session)]
+
+
+@router.get("/prior-recipients")
+def get_prior_recipients(session: Session = Depends(get_session)):
+    return list_prior_recipients(session)
+
+
+@router.post("/discard-open")
+def discard_every_open_draft(session: Session = Depends(get_session)):
+    return [draft_as_chat_item(draft) for draft in discard_open_drafts(session)]
 
 
 @router.post("/{draft_id}/confirm")
