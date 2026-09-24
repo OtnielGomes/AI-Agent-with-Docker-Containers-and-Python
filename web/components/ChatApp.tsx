@@ -205,6 +205,9 @@ export function ChatApp() {
       }
       setReviewDrafts(drafts);
       setPriorRecipients(recipients);
+      if (drafts.some((draft) => !isValidEmail(draft.recipient))) {
+        setAlert(INVALID_EMAIL_ALERT);
+      }
     }
     void load();
     return () => {
@@ -255,6 +258,13 @@ export function ChatApp() {
 
     const snapshot = reviewDrafts.map((draft) => ({ ...draft }));
     const userKey = nextKey("user");
+    function restoreFailedTurn() {
+      setTranscript((current) => current.filter((item) => item.key !== userKey));
+      setReviewDrafts(snapshot);
+      if (source === "composer") {
+        setChatInput(userText);
+      }
+    }
     setAlert(null);
     setTranscript((current) => [
       ...current,
@@ -285,10 +295,7 @@ export function ChatApp() {
       if (!response.ok || typeof content !== "string") {
         const errorText = typeof data.error === "string" ? data.error : "";
         setAlert(alertForChatPayload(errorText));
-        setReviewDrafts(snapshot);
-        if (source === "composer") {
-          setChatInput(userText);
-        }
+        restoreFailedTurn();
         return;
       }
 
@@ -305,10 +312,7 @@ export function ChatApp() {
       );
     } catch (error) {
       setAlert(isTimeoutError(error) ? TIMEOUT_ALERT : CONNECTION_ALERT);
-      setReviewDrafts(snapshot);
-      if (source === "composer") {
-        setChatInput(userText);
-      }
+      restoreFailedTurn();
     } finally {
       setIsSending(false);
     }
@@ -470,9 +474,11 @@ export function ChatApp() {
             />
             Minha caixa de entrada
           </label>
-          <p className="text-xs leading-5" style={{ color: "var(--muted)" }}>
-            Os e-mails saem para o endereço configurado na aplicação.
-          </p>
+          {recipientChoice === "inbox" ? (
+            <p className="text-xs leading-5" style={{ color: "var(--muted)" }}>
+              Os e-mails saem para o endereço configurado na aplicação.
+            </p>
+          ) : null}
           <label className="flex items-center gap-2 text-sm">
             <input
               type="radio"

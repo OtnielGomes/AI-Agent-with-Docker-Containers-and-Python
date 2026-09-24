@@ -395,6 +395,9 @@ test("pins another recipient only when the address is valid", async ({ page }) =
 
   await page.getByRole("radio", { name: "Outro destinatário" }).check();
   await expect(page.getByRole("radio", { name: "Minha caixa de entrada" })).not.toBeChecked();
+  await expect(
+    page.getByText("Os e-mails saem para o endereço configurado na aplicação."),
+  ).toHaveCount(0);
   await page.getByRole("textbox", { name: "E-mail do destinatário" }).fill("bia@example.com");
   await page.getByRole("textbox", { name: "Mensagem" }).fill("para a bia");
   await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
@@ -647,8 +650,14 @@ test("a failed turn unlocks the snapshotted cards and does not invent a reply", 
   await expect(page.getByRole("region", { name: "Conversa" }).getByRole("alert")).toHaveCount(0);
   await expect(page.getByRole("article", { name: "Assistente" })).toHaveCount(0);
   await expect(composer).toHaveValue("encurta");
+  await expect(page.getByRole("article", { name: "Você" })).toHaveCount(0);
   await expect(card.getByRole("textbox", { name: "Corpo do e-mail", exact: true })).toHaveValue("KEEP");
   await expect(card.getByRole("textbox", { name: "Assunto", exact: true })).toBeEnabled();
+
+  world.chat = defaultChat;
+  await composer.press("Enter");
+  await expect(page.getByRole("article", { name: "Você" })).toHaveCount(1);
+  await expect(page.getByRole("article", { name: "Assistente" })).toContainText("Pronto.");
 });
 
 test("confirm and discard append a receipt at the end of the session", async ({ page }) => {
@@ -698,6 +707,14 @@ test("confirm and discard append a receipt at the end of the session", async ({ 
   });
   expect(chip).not.toBe(act);
   expect(isGreenDominant(chip)).toBe(false);
+});
+
+test("a loaded draft with an invalid recipient alerts before confirm", async ({ page }) => {
+  world.drafts = [draft({ id: "bad", subject: "Ruim", recipient: "nope" })];
+  await openChat(page);
+  await expect(interfaceAlert(page)).toHaveText("Informe um e-mail válido.");
+  await expect(page.getByRole("button", { name: "Confirmar envio", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Descartar", exact: true })).toBeEnabled();
 });
 
 test("an invalid recipient disables only confirm and a rejected confirm leaves the card open", async ({ page }) => {
