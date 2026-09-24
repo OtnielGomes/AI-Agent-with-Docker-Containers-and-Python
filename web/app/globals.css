@@ -1,13 +1,23 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fafafa;
-  --foreground: #18181b;
+  --background: #f3eee4;
+  --foreground: #1f1a17;
+  --paper: #f3eee4;
+  --ink: #1f1a17;
+  --talk: #3e5c85;
+  --act: #b8611a;
+  --danger: #b4234a;
+  --quiet: #e4dccc;
+  --line: #ddd4c6;
+  --muted: #5c564e;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-paper: var(--paper);
+  --color-quiet: var(--quiet);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -18,7 +28,97 @@ body {
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.chat-shell {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chat-sidebar,
+.chat-header,
+.chat-transcript,
+.chat-review,
+.chat-composer {
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-sidebar {
+  flex: none;
+  overflow: auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-header,
+.chat-composer {
+  flex: none;
+}
+
+.chat-transcript {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.chat-review {
+  flex: none;
+  overflow: auto;
+  max-height: 42dvh;
+  border-top: 1px solid var(--line);
+}
+
+.chat-composer {
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 64rem) {
+  .chat-shell {
+    display: grid;
+    grid-template-columns: 18rem minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "sidebar header"
+      "sidebar transcript"
+      "sidebar composer";
+  }
+
+  .chat-shell:has(.chat-review) {
+    grid-template-columns: 18rem minmax(0, 1fr) minmax(17rem, 24rem);
+    grid-template-areas:
+      "sidebar header review"
+      "sidebar transcript review"
+      "sidebar composer review";
+  }
+
+  .chat-sidebar {
+    grid-area: sidebar;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .chat-header {
+    grid-area: header;
+  }
+
+  .chat-transcript {
+    grid-area: transcript;
+  }
+
+  .chat-review {
+    grid-area: review;
+    max-height: none;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  .chat-composer {
+    grid-area: composer;
+  }
 }

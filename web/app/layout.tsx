@@ -13,15 +13,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Agent Chat",
-  description:
-    "Research and email assistant. History is kept for this session only.",
+  title: "Assistente de e-mail",
+  description: "Pesquisa, caixa de entrada e rascunhos.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
-      lang="en"
+      lang="pt"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">{children}</body>

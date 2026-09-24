@@ -43,3 +43,8 @@ Thumbs.db
 node_modules/
 .next/
 out/
+
+# Playwright
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
