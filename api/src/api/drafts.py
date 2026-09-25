@@ -59,6 +59,9 @@ class Draft(SQLModel, table=True):
 _created_in_turn: ContextVar[list[Draft] | None] = ContextVar(
     "created_in_turn", default=None
 )
+_reply_targets: ContextVar[dict[str, str] | None] = ContextVar(
+    "reply_targets", default=None
+)
 
 
 def _require_open_draft(session: Session, draft_id: uuid.UUID) -> Draft:
@@ -81,6 +84,23 @@ def _record_turn_draft(draft: Draft) -> None:
     bucket.append(draft)
 
 
+def remember_reply_target(draft_id: str, inbound_id: str | None) -> None:
+    mapping = _reply_targets.get()
+    if mapping is None or not inbound_id:
+        return
+    mapping[draft_id] = inbound_id
+
+
+@contextmanager
+def collecting_reply_targets() -> Iterator[dict[str, str]]:
+    mapping: dict[str, str] = {}
+    token = _reply_targets.set(mapping)
+    try:
+        yield mapping
+    finally:
+        _reply_targets.reset(token)
+
+
 def create_open_draft(
     session: Session,
     *,
@@ -90,8 +110,13 @@ def create_open_draft(
     named: str | None,
     default: str | None,
     sender_name: str | None = None,
+    ignore_pinned: bool = False,
 ) -> Draft:
-    recipient = resolve_recipient(pinned=pinned, named=named, default=default)
+    recipient = resolve_recipient(
+        pinned=None if ignore_pinned else pinned,
+        named=named,
+        default=default,
+    )
     prepared = prepare_assistant_outbound_email_body(body, sender_name)
     draft = Draft(
         subject=subject,
@@ -147,20 +172,32 @@ def collecting_created_drafts() -> Iterator[list[Draft]]:
         _created_in_turn.reset(token)
 
 
-def draft_as_chat_item(draft: Draft) -> dict[str, str]:
-    return {
+def draft_as_chat_item(
+    draft: Draft, inbound_id: str | None = None
+) -> dict[str, str]:
+    item = {
         "id": str(draft.id),
         "subject": draft.subject,
         "body": draft.body,
         "recipient": draft.recipient,
         "state": draft.state,
     }
+    if inbound_id:
+        item["inboundId"] = inbound_id
+    return item
 
 
-def chat_turn_payload(content: str, drafts: list[Draft]) -> dict[str, Any]:
+def chat_turn_payload(
+    content: str,
+    drafts: list[Draft],
+    reply_targets: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    targets = reply_targets or {}
     return {
         "content": content,
-        "drafts": [draft_as_chat_item(item) for item in drafts],
+        "drafts": [
+            draft_as_chat_item(item, targets.get(str(item.id))) for item in drafts
+        ],
     }
 
 

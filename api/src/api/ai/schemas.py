@@ -16,6 +16,7 @@ class DraftSchema(BaseModel):
     body: str
     recipient: str
     state: str
+    inboundId: str | None = None
 
 
 class SupervisorMessageSchema(BaseModel):

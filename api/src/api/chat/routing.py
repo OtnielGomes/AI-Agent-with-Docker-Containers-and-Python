@@ -9,19 +9,31 @@ from .models import (
     ChatMenssagePayload,
     ChatMessage,
     ChatMessage_listItem,
+    InboundEmailSnapshot,
     OpenDraftSnapshot,
 )
 from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
 from api.ai.schemas import SupervisorMessageSchema
-from api.drafts import chat_turn_payload, collecting_created_drafts
+from api.drafts import (
+    chat_turn_payload,
+    collecting_created_drafts,
+    collecting_reply_targets,
+)
 from api.myemailer.recipient import validated_recipient
 
-def _with_open_drafts(message: str, open_drafts: list[OpenDraftSnapshot]) -> str:
+def _with_open_drafts(
+    message: str,
+    open_drafts: list[OpenDraftSnapshot],
+    inbound_emails: list[InboundEmailSnapshot],
+) -> str:
     """Give the model the review cards for this turn, oldest first."""
     if not open_drafts:
-        return f"{message}\n\nOpen Drafts on the review cards: none."
+        return _with_inbound_emails(
+            f"{message}\n\nOpen Drafts on the review cards: none.",
+            inbound_emails,
+        )
 
     blocks: list[str] = []
     for index, draft in enumerate(open_drafts, start=1):
@@ -32,9 +44,31 @@ def _with_open_drafts(message: str, open_drafts: list[OpenDraftSnapshot]) -> str
             f"body:\n{draft.body}"
         )
     listed = "\n\n".join(blocks)
-    return (
+    message = (
         f"{message}\n\n"
         "Open Drafts on the review cards, oldest at the top:\n\n"
+        f"{listed}"
+    )
+    return _with_inbound_emails(message, inbound_emails)
+
+
+def _with_inbound_emails(message: str, inbound_emails: list[InboundEmailSnapshot]) -> str:
+    if not inbound_emails:
+        return message
+    blocks: list[str] = []
+    for item in inbound_emails:
+        blocks.append(
+            f"id: {item.id}\n"
+            f"sender: {item.sender}\n"
+            f"address: {item.address}\n"
+            f"subject: {item.subject}\n"
+            f"date: {item.date}\n"
+            f"body:\n{item.body}"
+        )
+    listed = "\n\n".join(blocks)
+    return (
+        f"{message}\n\n"
+        "Inbound emails in the inbox list, newest first:\n\n"
         f"{listed}"
     )
 
@@ -86,7 +120,7 @@ def chat_create_message(
     else:
         pin = None
 
-    data = payload.model_dump(exclude={"to_email", "open_drafts"})
+    data = payload.model_dump(exclude={"to_email", "open_drafts", "inbound_emails"})
     obj = ChatMessage.model_validate(data)
     session.add(obj)
     session.commit()
@@ -96,7 +130,9 @@ def chat_create_message(
         "messages": [
             {
                 "role": "user",
-                "content": _with_open_drafts(payload.message, payload.open_drafts),
+                "content": _with_open_drafts(
+                    payload.message, payload.open_drafts, payload.inbound_emails
+                ),
             },
         ]
     }
@@ -104,8 +140,9 @@ def chat_create_message(
     if pin:
         invoke_config = {"configurable": {"to_email": pin}}
 
-    with collecting_created_drafts() as drafts:
-        result = supe.invoke(msg_data, config=invoke_config)
+    with collecting_reply_targets() as reply_targets:
+        with collecting_created_drafts() as drafts:
+            result = supe.invoke(msg_data, config=invoke_config)
     if not result:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     
@@ -113,4 +150,6 @@ def chat_create_message(
     if not messages:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     
-    return chat_turn_payload(extract_assistant_reply(messages), drafts)
+    return chat_turn_payload(
+        extract_assistant_reply(messages), drafts, reply_targets
+    )

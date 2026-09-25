@@ -439,6 +439,7 @@ class GmailImapParser:
                 email_data["body"] = plain_body
             if html_body:
                 email_data["html_body"] = html_body
+            email_data["unread"] = self._is_unread(email_id, use_uid)
             
             return email_data
             
@@ -447,6 +448,21 @@ class GmailImapParser:
                 print(f"Failed to parse email {email_id}: {e}")
             return None
     
+    def _is_unread(self, email_id: bytes, use_uid: bool) -> bool:
+        """True when the message has no \\Seen flag. FLAGS does not mark it read."""
+        try:
+            if not self.imap:
+                return False
+            if use_uid:
+                status, data = self.imap.uid("fetch", email_id, "(FLAGS)")
+            else:
+                status, data = self.imap.fetch(email_id, "(FLAGS)")
+            if status != "OK" or not data:
+                return False
+            return "\\Seen" not in repr(data)
+        except Exception:
+            return False
+
     def mark_emails_as_read(self, email_ids: List[bytes], verbose: bool = False):
         """
         Mark emails as read.

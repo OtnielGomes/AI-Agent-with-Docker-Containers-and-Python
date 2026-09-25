@@ -14,11 +14,21 @@ class OpenDraftSnapshot(SQLModel):
     recipient: str
 
 
+class InboundEmailSnapshot(SQLModel):
+    id: str
+    sender: str = ""
+    address: str = ""
+    subject: str = ""
+    date: str = ""
+    body: str = ""
+
+
 # Validation
 class ChatMenssagePayload(SQLModel):
     message: str
     to_email: str | None = None
     open_drafts: list[OpenDraftSnapshot] = Field(default_factory=list)
+    inbound_emails: list[InboundEmailSnapshot] = Field(default_factory=list)
 
 # Saving, getting,updating, deleting:
 class ChatMessage(SQLModel, table=True):

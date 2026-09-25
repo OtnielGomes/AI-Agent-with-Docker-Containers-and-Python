@@ -11,7 +11,7 @@ from sqlmodel import Session
 
 from api.ai.services import generate_email_message
 from api.db import engine
-from api.drafts import create_open_draft, revise_open_draft
+from api.drafts import create_open_draft, remember_reply_target, revise_open_draft
 from api.myemailer.inbox_reader import read_inbox
 
 
@@ -62,6 +62,8 @@ def send_me_email(
     subject: str,
     content: str,
     to_email: str | None = None,
+    reply: bool = False,
+    inbound_id: str | None = None,
     *,
     config: Annotated[RunnableConfig, InjectedToolArg],
 ) -> str:
@@ -72,10 +74,16 @@ def send_me_email(
         content: The content of the email.
         to_email: Optional recipient. Omit to use the default inbox address
             or the recipient selected in the UI for this request.
+            Required when reply is true: the Inbound email's sender address.
+        reply: True when this Draft answers one Inbound email. The pinned
+            recipient is ignored.
+        inbound_id: Stable id of that Inbound email. Omit unless reply is true.
     """
+    if reply and not (to_email and to_email.strip()):
+        return "Error creating email draft: a Reply needs the sender address."
     try:
         pinned = None
-        if config:
+        if config and not reply:
             pinned = config.get("configurable", {}).get("to_email")
         with Session(engine) as session:
             draft = create_open_draft(
@@ -86,7 +94,10 @@ def send_me_email(
                 named=to_email,
                 default=os.environ.get("EMAIL_ADDRESS"),
                 sender_name=os.environ.get("EMAIL_SENDER_NAME"),
+                ignore_pinned=reply,
             )
+        if reply:
+            remember_reply_target(str(draft.id), inbound_id)
     except Exception as e:
         return f"Error creating email draft: {e}"
     return (

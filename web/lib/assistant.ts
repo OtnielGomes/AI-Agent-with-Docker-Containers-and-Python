@@ -13,6 +13,26 @@ export type DraftCard = {
   body: string;
   recipient: string;
   state: DraftState;
+  inboundId?: string;
+};
+
+export type InboundEmail = {
+  id: string;
+  sender: string;
+  address: string;
+  subject: string;
+  date: string;
+  unread: boolean;
+  body: string;
+};
+
+export type InboundEmailSnapshot = {
+  id: string;
+  sender: string;
+  address: string;
+  subject: string;
+  date: string;
+  body: string;
 };
 
 export type ChatTurnResponse = {
@@ -82,12 +102,15 @@ function parseDraft(raw: unknown): DraftCard | null {
   ) {
     return null;
   }
+  const inboundId =
+    typeof item.inboundId === "string" && item.inboundId ? item.inboundId : undefined;
   return {
     id: item.id,
     subject: item.subject,
     body: item.body,
     recipient: item.recipient,
     state: item.state,
+    ...(inboundId ? { inboundId } : {}),
   };
 }
 
@@ -130,12 +153,14 @@ export async function sendChatMessage(
   message: string,
   pinnedRecipient?: string | null,
   openDrafts: OpenDraftSnapshot[] = [],
+  inboundEmails: InboundEmailSnapshot[] = [],
 ): Promise<ChatTurnResponse> {
   const payload: {
     message: string;
     to_email?: string;
     open_drafts: OpenDraftSnapshot[];
-  } = { message, open_drafts: openDrafts };
+    inbound_emails: InboundEmailSnapshot[];
+  } = { message, open_drafts: openDrafts, inbound_emails: inboundEmails };
   if (pinnedRecipient) {
     payload.to_email = pinnedRecipient;
   }
@@ -336,4 +361,110 @@ export async function listOpenDrafts(baseUrl: string): Promise<DraftCard[]> {
   }
 
   return parseDrafts(data);
+}
+
+function parseInbound(raw: unknown): InboundEmail | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const item = raw as Record<string, unknown>;
+  if (
+    typeof item.id !== "string" ||
+    typeof item.sender !== "string" ||
+    typeof item.address !== "string" ||
+    typeof item.subject !== "string" ||
+    typeof item.date !== "string" ||
+    typeof item.body !== "string" ||
+    typeof item.unread !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    id: item.id,
+    sender: item.sender,
+    address: item.address,
+    subject: item.subject,
+    date: item.date,
+    unread: item.unread,
+    body: item.body,
+  };
+}
+
+export async function listInboundEmails(baseUrl: string): Promise<InboundEmail[]> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${baseUrl}/api/inbox/?limit=10&days=7`,
+      {},
+      DRAFT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw connectionError(error, "Could not load the inbox.");
+  }
+  if (!response.ok) {
+    throw await readAssistantError(response);
+  }
+  let data: { emails?: unknown };
+  try {
+    data = (await response.json()) as { emails?: unknown };
+  } catch {
+    throw new AssistantError("Invalid JSON response from backend.");
+  }
+  if (!Array.isArray(data.emails)) {
+    return [];
+  }
+  return data.emails.flatMap((item) => {
+    const email = parseInbound(item);
+    return email ? [email] : [];
+  });
+}
+
+export async function markInboundRead(baseUrl: string, emailId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${baseUrl}/api/inbox/${encodeURIComponent(emailId)}/read`,
+      { method: "POST" },
+      DRAFT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw connectionError(error, "Could not mark the email read.");
+  }
+  if (!response.ok) {
+    throw await readAssistantError(response);
+  }
+}
+
+export async function createInboundReply(
+  baseUrl: string,
+  emailId: string,
+): Promise<DraftCard> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${baseUrl}/api/inbox/${encodeURIComponent(emailId)}/reply`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+      CHAT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw connectionError(error, "Could not create the reply.");
+  }
+  if (!response.ok) {
+    throw await readAssistantError(response);
+  }
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new AssistantError("Invalid JSON response from backend.");
+  }
+  const parsed = parseDraft(data);
+  if (!parsed || parsed.state !== "open") {
+    throw new AssistantError("Backend response missing a Draft.");
+  }
+  return parsed;
 }

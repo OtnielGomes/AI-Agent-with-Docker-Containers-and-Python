@@ -3,7 +3,12 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { DraftReviewCard } from "@/components/DraftReviewCard";
-import type { DraftCard } from "@/lib/assistant";
+import {
+  ArrivalNotices,
+  InboundEmailList,
+  OpenedInboundEmail,
+} from "@/components/InboundMail";
+import type { DraftCard, InboundEmail } from "@/lib/assistant";
 import { isValidEmail } from "@/lib/email";
 
 type TranscriptItem =
@@ -34,7 +39,45 @@ const TIMEOUT_ALERT = "A resposta demorou demais.";
 const CONFIRM_ALERT = "Não foi possível confirmar o envio.";
 const DISCARD_ALERT = "Não foi possível descartar.";
 const CLEAR_ALERT = "Não foi possível limpar a conversa.";
+const LOAD_INBOX_ALERT = "Não foi possível carregar a caixa de entrada.";
+const MARK_READ_ALERT = "Não foi possível marcar o e-mail como lido.";
+const REPLY_ALERT = "Não foi possível criar a resposta.";
+const REVISION_ALERT = "Não foi possível atualizar o rascunho.";
 const WAIT_STATUS = "Preparando a resposta… Pode levar alguns minutos.";
+const INBOX_POLL_MS = 60_000;
+
+const autoReplyStarted = new Set<string>();
+
+function claimsDraftReady(content: string): boolean {
+  return /rascunho est[aá] pronto/i.test(content) || /draft is ready/i.test(content);
+}
+
+function revisionLanded(snapshot: DraftCard[], incoming: DraftCard[]): boolean {
+  const before = new Map(snapshot.map((draft) => [draft.id, draft]));
+  return incoming.some((draft) => {
+    const prior = before.get(draft.id);
+    if (!prior) {
+      return true;
+    }
+    return prior.subject !== draft.subject || prior.body !== draft.body;
+  });
+}
+
+function isInboundEmail(value: unknown): value is InboundEmail {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.sender === "string" &&
+    typeof item.address === "string" &&
+    typeof item.subject === "string" &&
+    typeof item.date === "string" &&
+    typeof item.unread === "boolean" &&
+    typeof item.body === "string"
+  );
+}
 
 function applyTurnDrafts(
   current: DraftCard[],
@@ -179,9 +222,22 @@ export function ChatApp() {
   const [isClearing, setIsClearing] = useState(false);
   const [clearPrompt, setClearPrompt] = useState(false);
   const [pending, setPending] = useState<Record<string, PendingAction>>({});
+  const [inbound, setInbound] = useState<InboundEmail[]>([]);
+  const [notices, setNotices] = useState<InboundEmail[]>([]);
+  const [openedId, setOpenedId] = useState<string | null>(null);
   const persistedRecipients = useRef<Map<string, string>>(new Map());
   const keyRef = useRef(0);
   const transcriptRef = useRef<HTMLElement | null>(null);
+  const inboundRef = useRef<InboundEmail[]>([]);
+  const noticesRef = useRef<InboundEmail[]>([]);
+  const baselineRef = useRef<Set<string> | null>(null);
+  const sendingRef = useRef(false);
+  const draftsRef = useRef<DraftCard[]>([]);
+  const replyInFlight = useRef<Set<string>>(new Set());
+  const refreshInboxRef = useRef<() => Promise<void>>(async () => undefined);
+
+  sendingRef.current = isSending;
+  draftsRef.current = reviewDrafts;
 
   function nextKey(prefix: string): string {
     keyRef.current += 1;
@@ -237,6 +293,187 @@ export function ChatApp() {
     setPriorRecipients(await fetchPriorRecipients());
   }
 
+  function setInboundList(next: InboundEmail[]) {
+    inboundRef.current = next;
+    setInbound(next);
+  }
+
+  function setNoticeList(next: InboundEmail[]) {
+    noticesRef.current = next;
+    setNotices(next);
+  }
+
+  function dropNoticesFor(drafts: DraftCard[]) {
+    const ids = new Set(
+      drafts.flatMap((draft) => (draft.inboundId ? [draft.inboundId] : [])),
+    );
+    if (ids.size === 0) {
+      return;
+    }
+    setNoticeList(noticesRef.current.filter((item) => !ids.has(item.id)));
+  }
+
+  async function postReply(id: string, automatic: boolean) {
+    if (sendingRef.current || replyInFlight.current.has(id)) {
+      if (automatic) {
+        autoReplyStarted.delete(id);
+      }
+      return;
+    }
+    replyInFlight.current.add(id);
+    try {
+      const response = await fetch(`/api/inbox/${encodeURIComponent(id)}/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await readJson(response);
+      if (!response.ok || !isDraftCard(data) || data.state !== "open") {
+        if (automatic) {
+          autoReplyStarted.delete(id);
+        }
+        setAlert(REPLY_ALERT);
+        return;
+      }
+      setReviewDrafts((current) => {
+        if (current.some((item) => item.id === data.id)) {
+          return current;
+        }
+        persistedRecipients.current.set(data.id, data.recipient);
+        const next = [...current, data];
+        draftsRef.current = next;
+        return next;
+      });
+      setNoticeList(noticesRef.current.filter((item) => item.id !== id));
+      setAlert((current) => (current === REPLY_ALERT ? null : current));
+    } catch {
+      if (automatic) {
+        autoReplyStarted.delete(id);
+      }
+      setAlert(REPLY_ALERT);
+    } finally {
+      replyInFlight.current.delete(id);
+    }
+  }
+
+  function maybeAutoReply(nextNotices: InboundEmail[]) {
+    if (sendingRef.current || draftsRef.current.length > 0 || nextNotices.length === 0) {
+      return;
+    }
+    const newest = nextNotices[0];
+    if (autoReplyStarted.has(newest.id) || replyInFlight.current.has(newest.id)) {
+      return;
+    }
+    autoReplyStarted.add(newest.id);
+    void postReply(newest.id, true);
+  }
+
+  function applyListing(emails: InboundEmail[] | null) {
+    if (emails === null) {
+      setAlert(LOAD_INBOX_ALERT);
+      if (baselineRef.current === null) {
+        setInboundList([]);
+      }
+      return;
+    }
+    const previous = baselineRef.current;
+    baselineRef.current = new Set(emails.map((item) => item.id));
+    setInboundList(emails);
+    setAlert((current) => (current === LOAD_INBOX_ALERT ? null : current));
+    if (previous === null) {
+      return;
+    }
+    const known = new Set(noticesRef.current.map((item) => item.id));
+    const fresh = emails.filter((item) => !previous.has(item.id) && !known.has(item.id));
+    if (fresh.length === 0) {
+      return;
+    }
+    const nextNotices = [...fresh, ...noticesRef.current];
+    setNoticeList(nextNotices);
+    maybeAutoReply(nextNotices);
+  }
+
+  refreshInboxRef.current = async () => {
+    try {
+      const response = await fetch("/api/inbox?limit=10&days=7", { cache: "no-store" });
+      const data = await readJson(response);
+      if (!response.ok || !Array.isArray(data.emails)) {
+        applyListing(null);
+        return;
+      }
+      applyListing(data.emails.filter(isInboundEmail));
+    } catch {
+      applyListing(null);
+    }
+  };
+
+  useEffect(() => {
+    let timer: number | null = null;
+
+    function stop() {
+      if (timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    function start() {
+      stop();
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      timer = window.setInterval(() => {
+        void refreshInboxRef.current();
+      }, INBOX_POLL_MS);
+    }
+
+    function onVisibility() {
+      if (document.visibilityState === "visible") {
+        void refreshInboxRef.current();
+        start();
+        return;
+      }
+      stop();
+    }
+
+    void refreshInboxRef.current();
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  async function openInbound(email: InboundEmail) {
+    setOpenedId(email.id);
+    if (!email.unread) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/inbox/${encodeURIComponent(email.id)}/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) {
+        setAlert(MARK_READ_ALERT);
+        return;
+      }
+      const clearUnread = (items: InboundEmail[]) =>
+        items.map((item) => (item.id === email.id ? { ...item, unread: false } : item));
+      setInboundList(clearUnread(inboundRef.current));
+      setNoticeList(clearUnread(noticesRef.current));
+      setAlert((current) => (current === MARK_READ_ALERT ? null : current));
+    } catch {
+      setAlert(MARK_READ_ALERT);
+    }
+  }
+
+  function dismissNotice(id: string) {
+    setNoticeList(noticesRef.current.filter((item) => item.id !== id));
+  }
+
   async function handleUserMessage(userText: string, source: MessageSource) {
     const text = userText.trim();
     if (!text || isSending || isClearing) {
@@ -266,6 +503,7 @@ export function ChatApp() {
       }
     }
     setAlert(null);
+    setOpenedId(null);
     setTranscript((current) => [
       ...current,
       { kind: "user", key: userKey, content: text },
@@ -273,6 +511,7 @@ export function ChatApp() {
     if (source === "composer") {
       setChatInput("");
     }
+    sendingRef.current = true;
     setIsSending(true);
 
     try {
@@ -288,6 +527,14 @@ export function ChatApp() {
             body: draft.body,
             recipient: draft.recipient,
           })),
+          inbound_emails: inboundRef.current.map((item) => ({
+            id: item.id,
+            sender: item.sender,
+            address: item.address,
+            subject: item.subject,
+            date: item.date,
+            body: item.body.slice(0, 1500),
+          })),
         }),
       });
       const data = await readJson(response);
@@ -302,19 +549,30 @@ export function ChatApp() {
       const incoming = Array.isArray(data.drafts)
         ? data.drafts.filter(isDraftCard).filter((draft) => draft.state === "open")
         : [];
+      const revisionMissed =
+        !revisionLanded(snapshot, incoming) &&
+        data.revision !== "unidentified" &&
+        (data.revision === "failed" || claimsDraftReady(content));
+      if (revisionMissed) {
+        setAlert(REVISION_ALERT);
+        return;
+      }
       const assistantKey = nextKey("assistant");
+      const nextDrafts = applyTurnDrafts(snapshot, incoming, persistedRecipients.current);
+      draftsRef.current = nextDrafts;
       setTranscript((current) => [
         ...current,
         { kind: "assistant", key: assistantKey, content },
       ]);
-      setReviewDrafts(
-        applyTurnDrafts(snapshot, incoming, persistedRecipients.current),
-      );
+      setReviewDrafts(nextDrafts);
+      dropNoticesFor(incoming);
     } catch (error) {
       setAlert(isTimeoutError(error) ? TIMEOUT_ALERT : CONNECTION_ALERT);
       restoreFailedTurn();
     } finally {
+      sendingRef.current = false;
       setIsSending(false);
+      maybeAutoReply(noticesRef.current);
     }
   }
 
@@ -341,7 +599,14 @@ export function ChatApp() {
         return;
       }
       const sentKey = nextKey("sent");
-      setReviewDrafts((current) => current.filter((item) => item.id !== draft.id));
+      setReviewDrafts((current) => {
+        const next = current.filter((item) => item.id !== draft.id);
+        draftsRef.current = next;
+        if (next.length === 0) {
+          queueMicrotask(() => maybeAutoReply(noticesRef.current));
+        }
+        return next;
+      });
       setTranscript((current) => [
         ...current,
         {
@@ -381,7 +646,14 @@ export function ChatApp() {
         return;
       }
       const discardedKey = nextKey("discarded");
-      setReviewDrafts((current) => current.filter((item) => item.id !== draft.id));
+      setReviewDrafts((current) => {
+        const next = current.filter((item) => item.id !== draft.id);
+        draftsRef.current = next;
+        if (next.length === 0) {
+          queueMicrotask(() => maybeAutoReply(noticesRef.current));
+        }
+        return next;
+      });
       setTranscript((current) => [
         ...current,
         {
@@ -410,6 +682,7 @@ export function ChatApp() {
     }
     if (reviewDrafts.length === 0) {
       setTranscript([]);
+      setOpenedId(null);
       setAlert(null);
       setClearPrompt(false);
       return;
@@ -434,6 +707,8 @@ export function ChatApp() {
       }
       setTranscript([]);
       setReviewDrafts([]);
+      draftsRef.current = [];
+      setOpenedId(null);
       persistedRecipients.current.clear();
       setClearPrompt(false);
       setAlert(null);
@@ -459,6 +734,10 @@ export function ChatApp() {
         );
   const chip = healthChip(apiOnline);
   const composerLocked = isSending || isClearing;
+  const opened =
+    inbound.find((item) => item.id === openedId) ??
+    notices.find((item) => item.id === openedId) ??
+    null;
 
   return (
     <div className="chat-shell">
@@ -515,6 +794,14 @@ export function ChatApp() {
             </ul>
           ) : null}
         </fieldset>
+
+        {transcript.length > 0 ? (
+          <InboundEmailList
+            emails={inbound}
+            clip
+            onOpen={(email) => void openInbound(email)}
+          />
+        ) : null}
 
         <div className="flex flex-col gap-2">
           {EXAMPLE_PROMPTS.map((prompt) => (
@@ -586,7 +873,28 @@ export function ChatApp() {
         aria-label="Conversa"
         className="chat-transcript flex flex-col gap-4 px-6 py-6"
       >
-        {transcript.map((item) => {
+        <ArrivalNotices
+          notices={notices}
+          onOpen={(email) => void openInbound(email)}
+          onDismiss={dismissNotice}
+        />
+        {opened ? (
+          <OpenedInboundEmail
+            email={opened}
+            replyLocked={isSending}
+            onBack={() => setOpenedId(null)}
+            onReply={(email) => void postReply(email.id, false)}
+          />
+        ) : (
+          <>
+            {transcript.length === 0 ? (
+              <InboundEmailList
+                emails={inbound}
+                clip={false}
+                onOpen={(email) => void openInbound(email)}
+              />
+            ) : null}
+            {transcript.map((item) => {
           if (item.kind === "user") {
             return (
               <article
@@ -658,6 +966,8 @@ export function ChatApp() {
             </article>
           );
         })}
+          </>
+        )}
         {isSending ? <p className="text-sm">{WAIT_STATUS}</p> : null}
       </section>
 

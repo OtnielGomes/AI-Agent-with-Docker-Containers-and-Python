@@ -37,6 +37,7 @@ def test_prepare_keeps_already_clean_body():
 
 def test_generation_hint_without_sender_name_forbids_placeholders_and_a_signature():
     hint = outbound_email_body_generation_hint("")
+    assert "Meu Amor" in hint
     assert "[Seu nome]" in hint
     assert "[Your name]" in hint
     assert "[Nome]" in hint

@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f3eee4;
+  --background: #ffffff;
   --foreground: #1f1a17;
-  --paper: #f3eee4;
+  --paper: #ffffff;
   --ink: #1f1a17;
   --talk: #3e5c85;
-  --act: #b8611a;
+  --act: #3e5c85;
   --danger: #b4234a;
-  --quiet: #e4dccc;
-  --line: #ddd4c6;
+  --quiet: #eef2f6;
+  --line: #d5dde8;
   --muted: #5c564e;
 }
 
@@ -31,6 +31,10 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.chat-shell a {
+  color: var(--talk);
 }
 
 .chat-shell {
@@ -68,9 +72,11 @@ body {
 }
 
 .chat-review {
-  flex: none;
+  flex: 0 0 60dvh;
+  height: 60dvh;
+  min-height: 60dvh;
+  max-height: 60dvh;
   overflow: auto;
-  max-height: 42dvh;
   border-top: 1px solid var(--line);
 }
 
@@ -90,7 +96,7 @@ body {
   }
 
   .chat-shell:has(.chat-review) {
-    grid-template-columns: 18rem minmax(0, 1fr) minmax(17rem, 24rem);
+    grid-template-columns: 18rem minmax(0, 1fr) minmax(17rem, 32rem);
     grid-template-areas:
       "sidebar header review"
       "sidebar transcript review"
@@ -113,6 +119,9 @@ body {
 
   .chat-review {
     grid-area: review;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
     max-height: none;
     border-top: 0;
     border-left: 1px solid var(--line);
@@ -121,4 +130,18 @@ body {
   .chat-composer {
     grid-area: composer;
   }
+}
+
+.inbound-list a {
+  display: block;
+  color: var(--talk);
+  text-decoration: none;
+}
+
+.inbound-clip {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }

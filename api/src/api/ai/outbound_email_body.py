@@ -26,7 +26,11 @@ def outbound_email_body_generation_hint(sender_name: str) -> str:
         'English Opening is "Hello," and Closing is "Talk soon!". '
         "Any other language uses a conventional greeting and farewell in that language. "
         "When the user's message states a person's name, the Opening greets them by that name "
-        '(for example "Olá Otniel,"). When it states none, greet without inventing a name. '
+        '(for example "Olá, Maria,"). When it states a relationship or a greeting form, '
+        'such as "Meu Amor" or "Querida", the Opening is that form for this Draft only, '
+        'not the default "Olá," or "Hello,". A name alone still uses the default Opening '
+        "plus that name. When it states neither, greet without inventing a name. "
+        "Do not reuse the form on a later Draft. "
         "The subject uses the same language as the body. "
         "The body language is the language the user's message asks for; otherwise the language "
         "that message is written in. "

@@ -35,3 +35,19 @@ def read_inbox(
             print("---")
     return emails
 
+
+def mark_inbound_read(email_id: str) -> None:
+    """Mark one inbox message read by UID. Listing does not call this."""
+    parser = GmailImapParser(
+        email_address=EMAIL_ADDRESS,
+        app_password=EMAIL_PASSWORD,
+    )
+    if not parser.connect(folder="INBOX"):
+        raise RuntimeError("Could not open the inbox.")
+    try:
+        status, _data = parser.imap.uid("STORE", email_id, "+FLAGS", "(\\Seen)")
+        if status != "OK":
+            raise RuntimeError("Could not mark the email read.")
+    finally:
+        parser.disconnect()
+

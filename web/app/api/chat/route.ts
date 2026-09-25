@@ -2,6 +2,7 @@ import {
   AssistantError,
   resolveBackendUrl,
   sendChatMessage,
+  type InboundEmailSnapshot,
   type OpenDraftSnapshot,
 } from "@/lib/assistant";
 
@@ -33,6 +34,31 @@ function openDraftSnapshots(raw: unknown): OpenDraftSnapshot[] {
   });
 }
 
+function inboundSnapshots(raw: unknown): InboundEmailSnapshot[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const email = item as Record<string, unknown>;
+    if (typeof email.id !== "string") {
+      return [];
+    }
+    return [
+      {
+        id: email.id,
+        sender: typeof email.sender === "string" ? email.sender : "",
+        address: typeof email.address === "string" ? email.address : "",
+        subject: typeof email.subject === "string" ? email.subject : "",
+        date: typeof email.date === "string" ? email.date : "",
+        body: typeof email.body === "string" ? email.body : "",
+      },
+    ];
+  });
+}
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
@@ -42,6 +68,7 @@ export async function POST(request: Request) {
     to_email?: unknown;
     backendUrl?: unknown;
     open_drafts?: unknown;
+    inbound_emails?: unknown;
   };
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message) {
@@ -61,6 +88,7 @@ export async function POST(request: Request) {
       message,
       pinnedRecipient,
       openDraftSnapshots(body.open_drafts),
+      inboundSnapshots(body.inbound_emails),
     );
     return Response.json(result);
   } catch (error) {
