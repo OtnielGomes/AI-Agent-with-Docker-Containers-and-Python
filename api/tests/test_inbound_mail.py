@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from api.inbound_mail import (
@@ -44,6 +46,145 @@ def test_html_only_email_becomes_plain_text_without_tags():
     assert item["sender"] == "Maria Silva"
     assert item["unread"] is True
     assert html_to_text("<p>A &amp; B</p>") == "A & B"
+
+
+_INVISIBLE = "\u034f\u200c\ufeff\u2007\u00ad\u200b"
+
+_QUOTED_PLAIN = """Em qui., 24 de set. de 2026, 22:58, Caroline Salles <sallesc31@gmail.com>
+escreveu:
+
+> Pilantra
+>
+>> Eu banho
+>>
+>>> Queria te contar alguns benefícios de tomar banho todos os dias. Isso
+>>> ajuda a manter a pele mais limpa.
+"""
+
+_QUOTED_HTML = """
+<div>Em qui., 24 de set. de 2026, 22:58, Caroline Salles &lt;sallesc31@gmail.com&gt; escreveu:</div>
+<blockquote><div>Pilantra</div>
+<blockquote><div>Eu banho</div>
+<blockquote><div>Queria te contar alguns benefícios de tomar banho todos os dias. Isso ajuda a manter a pele mais limpa.</div>
+</blockquote></blockquote></blockquote>
+"""
+
+_NEWSLETTER_PLAIN = (
+    f"PREHEADER_SECRET {_INVISIBLE}\n"
+    "Expand your career opportunities                                                                                                      "
+    "Build on your skills with additional training.\n"
+    "GoogleGoogle Digital Marketing & E-commerceEnroll now\n"
+    "-->\n"
+)
+
+_NEWSLETTER_HTML = f"""
+<html><head><style>.pad {{ padding: 40px; }}</style></head><body>
+<div style="display:none;max-height:0;overflow:hidden">PREHEADER_SECRET {_INVISIBLE}</div>
+<!--[if mso]><table><tr><td><![endif]-->
+<h1>Expand your career opportunities</h1>
+<p>Build on your skills with additional training.</p>
+<table><tr>
+<td>Google</td>
+<td><a href="https://www.coursera.org/learn/x">Google Digital Marketing &amp; E-commerce</a></td>
+<td><a href="https://www.coursera.org/enroll">Enroll now</a></td>
+</tr></table>
+</body></html>
+"""
+
+
+def _assert_readable_reply(body: str) -> None:
+    assert "Pilantra" in body
+    assert "Eu banho" in body
+    assert "Isso ajuda a manter a pele mais limpa" in body
+    assert "PilantraEu" not in body
+    assert "escreveu:Pilantra" not in body
+    assert not any(line.lstrip().startswith(">") for line in body.splitlines())
+
+
+def _assert_readable_newsletter(body: str) -> None:
+    assert "Expand your career opportunities" in body
+    assert "opportunitiesBuild" not in body
+    assert "Build on your skills with additional training." in body
+    assert "Google Digital Marketing & E-commerce" in body
+    assert re.search(r"E-commerce\s+Enroll now", body)
+    assert "PREHEADER_SECRET" not in body
+    assert "-->" not in body
+    assert "GoogleGoogle" not in body
+    assert not any(char in body for char in _INVISIBLE)
+    assert not re.search(r" {3,}", body)
+
+
+def test_quoted_reply_body_is_readable_plain_text():
+    multipart = to_inbound_item(
+        {
+            "uid": "24",
+            "from": "Caroline Salles <sallesc31@gmail.com>",
+            "subject": "Re: Benefícios de tomar banho todos os dias",
+            "timestamp": "Thu, 24 Sep 2026 22:59:28 -0300",
+            "body": _QUOTED_PLAIN,
+            "html_body": _QUOTED_HTML,
+        }
+    )
+    plain_only = to_inbound_item(
+        {
+            "uid": "25",
+            "from": "Caroline Salles <sallesc31@gmail.com>",
+            "subject": "Re: Benefícios de tomar banho todos os dias",
+            "timestamp": "Thu, 24 Sep 2026 22:59:28 -0300",
+            "body": _QUOTED_PLAIN,
+        }
+    )
+    assert multipart is not None and plain_only is not None
+    _assert_readable_reply(multipart["body"])
+    _assert_readable_reply(plain_only["body"])
+
+
+def test_newsletter_body_is_readable_plain_text():
+    multipart = to_inbound_item(
+        {
+            "uid": "22",
+            "from": "Coursera <no-reply@coursera.org>",
+            "subject": "Learn from Google, IBM, Meta, and more",
+            "timestamp": "Tue, 22 Sep 2026 21:46:36 +0000",
+            "body": _NEWSLETTER_PLAIN,
+            "html_body": _NEWSLETTER_HTML,
+        }
+    )
+    html_only = to_inbound_item(
+        {
+            "uid": "23",
+            "from": "Coursera <no-reply@coursera.org>",
+            "subject": "Learn from Google, IBM, Meta, and more",
+            "timestamp": "Tue, 22 Sep 2026 21:46:36 +0000",
+            "html_body": _NEWSLETTER_HTML,
+        }
+    )
+    assert multipart is not None and html_only is not None
+    _assert_readable_newsletter(multipart["body"])
+    _assert_readable_newsletter(html_only["body"])
+
+
+def test_plain_email_keeps_short_lines_and_image_only_html_falls_back():
+    plain = to_inbound_item(
+        {
+            "uid": "3",
+            "from": "Maria Silva <maria@example.com>",
+            "subject": "Oi",
+            "body": "Olá,\n\nTexto curto.\n\nAté mais!",
+        }
+    )
+    fallback = to_inbound_item(
+        {
+            "uid": "9",
+            "from": "Maria Silva <maria@example.com>",
+            "subject": "Foto",
+            "body": "Texto que importa.",
+            "html_body": "<html><body><img src='x' alt='foto'></body></html>",
+        }
+    )
+    assert plain is not None and fallback is not None
+    assert plain["body"] == "Olá,\n\nTexto curto.\n\nAté mais!"
+    assert fallback["body"] == "Texto que importa."
 
 
 def test_reply_opening_uses_the_sender_name_and_does_not_invent_one():

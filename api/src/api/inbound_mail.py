@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import html
 import re
 from collections.abc import Callable
 from email.utils import parseaddr
+from html.parser import HTMLParser
 
 from api.myemailer.recipient import validated_recipient
 
@@ -13,10 +13,43 @@ INBOUND_LIMIT = 10
 INBOUND_DAYS = 7
 
 _TAG = re.compile(r"<[^>]+>")
-_SCRIPT = re.compile(r"(?is)<(script|style)\b[^>]*>.*?</\1>")
-_BREAK = re.compile(r"(?i)<br\s*/?>")
-_PARAGRAPH = re.compile(r"(?i)</p\s*>")
 _LEADING_RE = re.compile(r"(?i)^re:\s*")
+_SKIP_TAGS = frozenset({"script", "style", "head", "title", "noscript"})
+_BLOCK_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "blockquote",
+        "div",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
+    }
+)
+_INVISIBLE = re.compile(r"[\u00ad\u034f\u200b-\u200d\u2060\ufeff\u180e]")
+_HIDDEN_STYLE = re.compile(
+    r"display\s*:\s*none|visibility\s*:\s*hidden|mso-hide\s*:\s*all|"
+    r"max-height\s*:\s*0(?:px)?|font-size\s*:\s*0(?:px)?|"
+    r"opacity\s*:\s*0(?:\.0+)?(?!\d|\.)",
+    re.IGNORECASE,
+)
+_QUOTE_PREFIX = re.compile(r"^(?:> ?)+")
 _GREETING = re.compile(
     r"^(ol[aá]|hello|hi|dear|querid[oa]|meu amor|hola|bom dia|boa tarde|boa noite)\b",
     re.IGNORECASE,
@@ -57,25 +90,111 @@ def split_sender(raw: str | None) -> tuple[str | None, str]:
     return cleaned, address
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Collect visible text, with breaks between blocks and cells."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skip_depth = 0
+        self._hidden_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        name = tag.lower()
+        if self._skip_depth:
+            self._skip_depth += 1
+            return
+        if self._hidden_depth:
+            self._hidden_depth += 1
+            return
+        if name in _SKIP_TAGS:
+            self._skip_depth = 1
+            return
+        attr_map = {key.lower(): value or "" for key, value in attrs}
+        if _is_hidden(attr_map):
+            self._hidden_depth = 1
+            return
+        if name == "br":
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.lower()
+        if self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._hidden_depth:
+            self._hidden_depth -= 1
+            return
+        if name in _BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth or self._hidden_depth:
+            return
+        self._parts.append(data)
+
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+def _is_hidden(attrs: dict[str, str]) -> bool:
+    if "hidden" in attrs or attrs.get("aria-hidden", "").lower() == "true":
+        return True
+    return _HIDDEN_STYLE.search(attrs.get("style", "")) is not None
+
+
+def _normalize_text(raw: str, *, strip_quotes: bool) -> str:
+    text = _INVISIBLE.sub("", raw)
+    text = text.replace("-->", "")
+    rows: list[tuple[str, bool]] = []
+    for line in text.splitlines():
+        content = _QUOTE_PREFIX.sub("", line) if strip_quotes else line
+        flowed = bool(content.strip()) and content.endswith((" ", "\t"))
+        content = re.sub(r"[^\S\n]+", " ", content).strip()
+        rows.append((content, flowed))
+
+    merged: list[str] = []
+    previous_flowed = False
+    for content, flowed in rows:
+        if not content:
+            if merged and merged[-1] != "":
+                merged.append("")
+            previous_flowed = False
+            continue
+        if merged and merged[-1] and (previous_flowed or content[0].islower()):
+            merged[-1] = f"{merged[-1]} {content}"
+        else:
+            merged.append(content)
+        previous_flowed = flowed
+    while merged and merged[-1] == "":
+        merged.pop()
+    return "\n".join(merged).strip()
+
+
 def html_to_text(raw: str) -> str:
-    text = _SCRIPT.sub(" ", raw or "")
-    text = _BREAK.sub("\n", text)
-    text = _PARAGRAPH.sub("\n", text)
-    text = _TAG.sub("", text)
-    text = html.unescape(text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    try:
+        extractor = _HTMLTextExtractor()
+        extractor.feed(raw or "")
+        extractor.close()
+        extracted = extractor.text()
+    except Exception:
+        extracted = _TAG.sub(" ", raw or "")
+    return _normalize_text(extracted, strip_quotes=False)
+
+
+def clean_plain(raw: str) -> str:
+    return _normalize_text(raw or "", strip_quotes=True)
 
 
 def plain_body(email: dict) -> str:
-    body = email.get("body")
-    if isinstance(body, str) and body.strip():
-        return body.strip()
+    plain = email.get("body")
+    plain_text = clean_plain(plain) if isinstance(plain, str) else ""
     html_body = email.get("html_body")
     if isinstance(html_body, str) and html_body.strip():
-        return html_to_text(html_body)
-    return ""
+        converted = html_to_text(html_body)
+        if converted:
+            return converted
+    return plain_text
 
 
 def guess_language(text: str) -> str:
