@@ -21,21 +21,18 @@ htmlcov/
 !.env.example
 
 
-# IDE and editor (track shared agent config under .cursor/rules and .cursor/skills)
-.cursor/*
-!.cursor/rules/
-!.cursor/rules/**
-!.cursor/skills/
-!.cursor/skills/**
+# IDE and editor
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Local agent tooling (track project skills under .agents/skills)
-.agents/*
-!.agents/skills/
-!.agents/skills/**
+# Local-only agent, editor, and tooling (not shared via git)
+.agents/
+.cursor/
+docs/
+AGENTS.md
+CONTEXT.md
 skills-lock.json
 
 # OS
