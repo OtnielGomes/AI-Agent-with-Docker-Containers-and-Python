@@ -1,117 +1,128 @@
 # AI Agent with Docker, LangGraph & Email
 
+[English](README.md) | [Português](README.pt-BR.md)
+
 [![Python](https://img.shields.io/badge/Python-3.13-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.139-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C?style=flat-square)](https://langchain-ai.github.io/langgraph/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-A **LangGraph multi-agent** chat assistant that researches content, reads your inbox, and sends emails via Gmail. **FastAPI** backend, **Streamlit** UI, and **PostgreSQL** persistence — all orchestrated with **Docker Compose** and ready to deploy on platforms like **DigitalOcean App Platform**.
+A **LangGraph** email assistant: it reads the inbox, drafts mail, and sends only after you confirm. **FastAPI** (`api/`), a **Next.js** chat UI (`web/`), and **PostgreSQL**, orchestrated with **Docker Compose** and deployed on **DigitalOcean App Platform**.
 
-[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Demos](#demos) • [Getting started](#getting-started) • [API](#api) • [Deploy](#deploy) • [Project structure](#project-structure) • [Troubleshooting](#troubleshooting)
+[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Walkthrough](#walkthrough) • [Getting started](#getting-started) • [API](#api) • [Deploy](#deploy) • [Project structure](#project-structure) • [Troubleshooting](#troubleshooting)
 
-![Agent interface with example prompts and recipient selection](./images/interface_of_agent.png)
+![Home screen with the inbox in the center and example prompts in the sidebar](./images/interface-inicial-en.png)
 
 ## Overview
 
-This project exposes a chat API that delegates tasks to a **LangGraph supervisor**. The supervisor routes requests to specialized agents:
+The chat UI talks to a **LangGraph supervisor**. The supervisor routes each message to a specialist:
 
-- **Research agent** — generates email subject and body from a natural-language request.
-- **Email agent** — reads the inbox (IMAP), summarizes messages, and sends emails (SMTP).
+- **Research agent** — turns a request into a subject and a plain-text body.
+- **Email agent** — reads the inbox over IMAP, summarizes messages, and prepares outbound mail.
 
-Typical flow: *"Research AI applied to business and email me the results"* → the research agent produces the content → the email agent sends it to the configured recipient.
+Outbound mail is a **draft** on a review card. You can edit the subject, body, and recipient, then choose **Confirm send** or **Discard**. SMTP runs on confirm.
 
-The Streamlit UI provides real-time chat, pre-built prompts, and the option to send to yourself or another address.
+On an empty conversation the inbox sits in the center. The sidebar pins **My inbox** or **Other recipient**, and offers three example prompts. A reply to an open message uses that message's sender as the recipient. The pinned address applies to the next new draft.
 
 ## Features
 
-- **Multi-agent supervisor** — automatic routing between research and email with `langgraph-supervisor`.
-- **Inbox reading** — listing, unread filtering, and summarization of recent emails via Gmail IMAP.
-- **Email sending** — SMTP with Gmail App Password; recipient set in the UI or in the message.
-- **Example prompts** — sidebar buttons to test summarization, drafting, and scheduling.
-- **Persistence** — user messages saved to PostgreSQL via SQLModel.
-- **Docker Compose** — backend, frontend, and database with hot-reload in development.
-- **Production deploy** — tested on DigitalOcean App Platform (backend + frontend + managed Postgres).
+- **Multi-agent supervisor** — routes research and email work with `langgraph-supervisor`.
+- **Inbox** — recent messages in the center; opening one shows the sender, subject, date, and plain-text body, and clears the unread mark.
+- **Draft, then send** — the assistant prepares the card; **Confirm send** delivers it through Gmail SMTP.
+- **Reply** — **Reply** opens one draft whose subject starts with `Re:` and whose recipient is the sender.
+- **Revise in place** — a follow-up in the composer updates that same card.
+- **Summaries** — recent mail, with sender and subject, from the example prompt.
+- **Persistence** — chat messages stored in PostgreSQL with SQLModel.
+- **Docker Compose** — api, web, and database, with reload while you develop.
+- **Production deploy** — DigitalOcean App Platform (api, web, and managed Postgres).
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    UI[Streamlit frontend] -->|POST /api/chats/| API[FastAPI]
-    Client[HTTP client] -->|POST /api/chats/| API
+    UI[Next chat UI] -->|chat and inbox| API[FastAPI]
     API --> DB[(PostgreSQL)]
     API --> Supervisor[LangGraph supervisor]
     Supervisor --> Research[research_agent]
     Supervisor --> Email[email_agent]
     Research -->|research_email| LLM[OpenAI]
-    Email -->|send_me_email| SMTP[Gmail SMTP]
+    Email -->|send_me_email| Draft[Draft]
     Email -->|get_recent_emails| IMAP[Gmail IMAP]
-    Supervisor --> API
-    API --> UI
-    API --> Client
+    Draft --> DB
+    UI -->|Confirm send| API
+    API -->|SMTP| GmailSMTP[Gmail SMTP]
 ```
 
 | Layer | Technology | Responsibility |
 |-------|------------|----------------|
-| API | FastAPI, uvicorn | HTTP routes, validation, persistence |
-| Agents | LangGraph, langgraph-supervisor | Supervisor + workers (research, email) |
-| LLM | langchain-openai | Structured email generation |
-| Email | smtplib, IMAP | Send and read via Gmail |
-| Database | SQLModel, PostgreSQL | Chat message history |
-| UI | Streamlit | Chat, recipient settings, prompts |
-| Containers | Docker Compose | Local orchestration and production base |
+| API | FastAPI, uvicorn | HTTP, validation, persistence |
+| Agents | LangGraph, langgraph-supervisor | Supervisor, research, and email |
+| LLM | langchain-openai | Subject and plain-text body |
+| Email | smtplib, IMAP | Send on confirm, read via Gmail |
+| Database | SQLModel, PostgreSQL | Messages and drafts |
+| UI | Next.js | Inbox, chat, review card, prompts |
+| Containers | Docker Compose | Local stack and the production base |
 
-## Demos
+## Walkthrough
 
-### Agent interface
+### Home
 
-Sidebar with connection test, recipient choice (*send to myself* or *other email*), and pre-built prompts.
+Open the page with an empty conversation. The message list is in the center. The sidebar shows **My inbox** and three example prompts. That screen is the cover above.
 
-![Agent interface](./images/interface_of_agent.png)
+### Open an email
 
-### Summarize recent emails
+Choose an unread item (the blue dot). The screen shows the sender, subject, date, and plain-text body, with **Back** and **Reply**. The dot is gone once the body is open.
 
-Request: *"Summarize my last 3 emails."* — the agent reads the inbox and returns a structured summary.
+![Opened email with Back and Reply](./images/botao-responder-en.png)
 
-![Email summarization test](./images/test_of__prompt_summarize-emails.png)
+### Reply
 
-### Schedule a meeting by email
+Choose **Reply**. The **Draft** card opens with a subject that starts with `Re:`, a greeting, and the sender as the recipient. The address pinned in the sidebar stays out of this reply.
 
-Request: *"Help me write an email to schedule a meeting for this week."*
+![Reply draft addressed to the sender](./images/teste-email-aberto-en.png)
 
-<table>
-  <tr>
-    <td width="50%"><img src="./images/test_send_email_1.png" alt="Meeting scheduling prompt" /></td>
-    <td width="50%"><img src="./images/result_of_test_send_email_1.png" alt="Meeting email result" /></td>
-  </tr>
-</table>
+### Draft from the chat
 
-### Email about Artificial Intelligence
+Discard the previous draft, or clear the conversation. Use the prompt *Write an email about artificial intelligence applied to business.* The card comes back with a subject, a body that opens with `Hello,` and closes with a sign-off, and the buttons **Confirm send** and **Discard**.
 
-Request: *"Write me an email about artificial intelligence applied to business."*
+![Prompt in the composer, with another recipient pinned](./images/teste-envio-email-en.png)
 
-<table>
-  <tr>
-    <td width="50%"><img src="./images/test_send_email_2.png" alt="AI prompt" /></td>
-    <td width="50%"><img src="./images/result_of_test_send_email_2.png" alt="AI email result" /></td>
-  </tr>
-</table>
+![Draft card ready to confirm or discard](./images/email-criado-en.png)
+
+**Confirm send** delivers that card. The same thread then shows it as sent.
+
+![Sent email after confirm](./images/confirmacao-envio-en.png)
+
+### Revise the draft
+
+With the card open, ask in the composer: *Shorten the body and change the subject to "AI in business".* The same card updates. A second draft does not appear.
+
+![Revision request in the composer](./images/editando-email-en.png)
+
+![Same draft after the subject and body change](./images/editando-email-resposta-en.png)
+
+### Summarize the inbox
+
+In a clear conversation, use *Summarize my last 3 emails.* The assistant answers with the sender and subject of the test messages.
+
+![Summary of the last three emails](./images/resumo-emails-en.png)
 
 ## Getting started
 
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- Gmail account with [App Password](https://support.google.com/accounts/answer/185833) enabled (2FA required)
-- [OpenAI](https://platform.openai.com/api-keys) API key
+- A Gmail account with an [App Password](https://support.google.com/accounts/answer/185833) (2FA required)
+- An [OpenAI](https://platform.openai.com/api-keys) API key
 
 ### Setup
 
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/<your-username>/AI-Agent-with-Docker-Containers-and-Python.git
+git clone https://github.com/OtnielGomes/AI-Agent-with-Docker-Containers-and-Python.git
 cd AI-Agent-with-Docker-Containers-and-Python
 ```
 
@@ -121,23 +132,25 @@ cd AI-Agent-with-Docker-Containers-and-Python
 cp .env.example .env
 ```
 
-3. Edit `.env` with your real values (never commit secrets):
+On PowerShell: `Copy-Item .env.example .env`
+
+3. Fill `.env` with real values. Keep secrets out of git.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `API_KEY` | Yes | Validated at backend startup |
+| `API_KEY` | Yes | Checked when the API starts |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
-| `OPENAI_MODEL_NAME` | No | Configurable default (e.g. `gpt-4o-mini`) |
-| `OPENAI_BASE_URL` | No | Custom OpenAI-compatible endpoint |
-| `EMAIL_ADDRESS` | Yes* | Gmail address (send + read) |
+| `OPENAI_MODEL_NAME` | No | Model name (for example `gpt-5-mini`) |
+| `OPENAI_BASE_URL` | No | OpenAI-compatible endpoint |
+| `EMAIL_ADDRESS` | Yes* | Gmail address used to send and read |
 | `EMAIL_PASSWORD` | Yes* | Gmail App Password |
 | `EMAIL_HOST` | No | Default `smtp.gmail.com` |
 | `EMAIL_PORT` | No | Default `465` |
-| `EMAIL_SENDER_NAME` | No | Display name when signing emails |
-| `BACKEND_URL` | No | Backend URL for the frontend |
+| `EMAIL_SENDER_NAME` | No | Display name on the sign-off |
+| `BACKEND_URL` | No | API URL for the chat UI |
 
-\* Required for email features.
+\* Required for inbox, drafts, and sending.
 
 ### Run with Docker Compose
 
@@ -147,42 +160,48 @@ docker compose up --build
 
 | Service | Local URL |
 |---------|-----------|
-| Frontend (Streamlit) | http://localhost:8501 |
-| Backend (FastAPI) | http://localhost:8080 |
+| Web (Next.js) | http://localhost:3000 |
+| API (FastAPI) | http://localhost:8080 |
 | PostgreSQL | localhost:5432 |
 
 > [!TIP]
-> Research + email flows can take **2+ minutes**. The frontend uses a 300 s timeout; configure reverse proxies with sufficient timeout in production.
+> A draft or a summary can take a couple of minutes. The chat UI waits up to 300 seconds. In production, give the reverse proxy at least that long.
 
-### Backend development without Docker
+### API without Docker
 
 ```bash
-cd backend/src
+cd api/src
 pip install -r ../requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Ensure `DATABASE_URL` points to a running Postgres instance.
+Point `DATABASE_URL` at a running Postgres instance.
 
-### Local frontend (backend in Docker)
+### Web UI against the API in Docker
 
 ```bash
-docker compose up backend db_service
-cd frontend
-pip install -r requirements.txt
-BACKEND_URL=http://localhost:8080 streamlit run app.py
+docker compose up api db_service
+cd web
+npm install
+BACKEND_URL=http://localhost:8080 npm run dev
 ```
 
 ## API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/` | Health check + project name |
+| `GET` | `/` | Health check and project name |
 | `GET` | `/api/chats/` | Chat router status |
-| `GET` | `/api/chats/recent/` | Last 10 persisted messages |
-| `POST` | `/api/chats/` | Send message → supervisor → response |
+| `GET` | `/api/chats/recent/` | Last 10 stored messages |
+| `POST` | `/api/chats/` | Message to the supervisor. Returns `content` and `drafts` |
+| `GET` | `/api/inbox/` | Recent inbox messages |
+| `POST` | `/api/inbox/{email_id}/read` | Mark one message read |
+| `POST` | `/api/inbox/{email_id}/reply` | Open a reply draft to that sender |
+| `GET` | `/api/drafts/` | Open drafts |
+| `POST` | `/api/drafts/{draft_id}/confirm` | Send that draft over SMTP |
+| `POST` | `/api/drafts/{draft_id}/discard` | Discard that draft |
 
-PowerShell example:
+A summary comes back in `content`. A request to write mail comes back with the draft in `drafts`. SMTP runs on confirm, with the subject, body, and recipient on the card. Pass `to_email` on `POST /api/chats/` when the new draft should use a pinned recipient. A reply ignores that pin.
 
 ```powershell
 Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" `
@@ -190,59 +209,45 @@ Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" `
   -Body '{"message": "Summarize my last 3 emails."}'
 ```
 
-With an explicit recipient:
-
-```powershell
-Invoke-RestMethod -Method POST -Uri "http://localhost:8080/api/chats/" `
-  -ContentType "application/json" `
-  -Body '{"message": "Write an email about AI.", "to_email": "recipient@example.com"}'
-```
-
 ## Deploy
 
-The project was successfully deployed on **DigitalOcean App Platform** as a Web App with three components: API (backend), interface (Streamlit), and managed PostgreSQL.
+The app is deployed on **DigitalOcean App Platform** as one Web App with three components: the API (`api`), the interface (`web`), and managed PostgreSQL.
 
 ![Deploy completed on DigitalOcean](./images/deploy-digital-ocean.png)
 
-![Backend, frontend, and PostgreSQL in production](./images/interface_deploy_digital-ocean.png)
+![API, web, and PostgreSQL in production](./images/interface_deploy_digital-ocean.png)
 
-### Manual build (backend)
-
-```bash
-docker build -t ai-agent-backend ./backend
-docker run -p 8000:8000 --env-file .env ai-agent-backend \
-  uvicorn main:app --host 0.0.0.0 --port 8000
-```
+![Runtime logs on DigitalOcean](./images/runtimeslogs.png)
 
 ### Production checklist
 
-- Set all environment variables in your provider's dashboard.
-- Point `DATABASE_URL` to managed Postgres.
-- Start command: `uvicorn main:app --host 0.0.0.0 --port 8000` (backend) and `streamlit run app.py ...` (frontend).
-- Some hosts block SMTP on ports 465/587 — if sending fails in production but works locally, test SMTP connectivity from the container or switch to an HTTPS email API (Resend, SendGrid, etc.).
+- Set every variable from `.env.example` in the App Platform dashboard. Point `DATABASE_URL` at the managed database.
+- API run command: `uvicorn main:app --host 0.0.0.0 --port 8000`.
+- Web run command: `npm run start`.
+- Some hosts block SMTP on ports 465 and 587. If send works locally and fails in production, test that port from the app or move sending to an HTTPS provider.
 
 > [!IMPORTANT]
-> The default `CMD` in `backend/Dockerfile` is `http.server`; in production, **always** override it with uvicorn (as in `compose.yaml`).
+> `api/Dockerfile` starts `http.server`. Set the API run command to uvicorn, as `compose.yaml` does locally on port 8080. `web/Dockerfile` runs `npm run dev`, which fits Compose; production uses `npm run start`.
 
 ## Project structure
 
 ```
 .
-├── compose.yaml              # Backend + frontend + Postgres
-├── .env.example              # Environment variable template (placeholders)
-├── images/                   # Screenshots and demos
-├── frontend/
-│   ├── app.py                # Streamlit UI (chat, recipient, prompts)
-│   ├── api_client.py         # HTTP client for the API
-│   └── Dockerfile
-└── backend/
+├── compose.yaml              # api, web, and Postgres
+├── .env.example              # Environment template
+├── images/                   # UI and deploy screenshots
+├── web/                      # Next.js chat UI
+└── api/
     ├── Dockerfile
     ├── requirements.txt
     └── src/
         ├── main.py           # FastAPI entrypoint
         └── api/
             ├── db.py         # SQLModel engine and session
-            ├── chat/         # Routes and message models
+            ├── drafts.py     # Draft store, confirm, discard
+            ├── inbound_mail.py
+            ├── inbox_routing.py
+            ├── chat/         # Chat routes and message models
             ├── ai/           # Agents, tools, LLM, schemas
             └── myemailer/    # SMTP, IMAP, Gmail parser
 ```
@@ -251,9 +256,9 @@ docker run -p 8000:8000 --env-file .env ai-agent-backend \
 
 | Issue | What to check |
 |-------|---------------|
-| Email fails in production | SMTP blocked by host; container logs; TCP test on port 465 |
-| `API_KEY is not set` | Missing `API_KEY` in `.env` or deploy dashboard |
-| Frontend timeout | Long flows are normal; increase proxy timeout or wait up to 5 min |
-| Empty inbox | Correct App Password; IMAP enabled on Gmail account |
-| API connection error | Correct `BACKEND_URL`; backend online (`GET /api/chats/`) |
-
+| Send fails in production | SMTP blocked on 465/587; app logs; TCP reachability |
+| `API_KEY is not set` | `API_KEY` missing from `.env` or the deploy dashboard |
+| Chat UI times out | Long turns are expected; wait up to 5 minutes or raise the proxy timeout |
+| Empty inbox | App Password, and IMAP enabled on the Gmail account |
+| UI cannot reach the API | `BACKEND_URL`, and `GET /api/chats/` while the API is up |
+| Confirm does nothing | The draft is still open; confirm is the call that runs SMTP |

@@ -21,23 +21,33 @@ htmlcov/
 !.env.example
 
 
-# IDE and editor
-.cursor/
+# IDE and editor (track shared agent config under .cursor/rules and .cursor/skills)
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+!.cursor/skills/
+!.cursor/skills/**
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Agent skills (local Cursor config)
-.agents/
+# Local agent tooling (track project skills under .agents/skills)
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 skills-lock.json
-
-# Project docs for local agents only
-AGENTS.md
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/secrets.toml
+# Next.js
+node_modules/
+.next/
+out/
+
+# Playwright
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/

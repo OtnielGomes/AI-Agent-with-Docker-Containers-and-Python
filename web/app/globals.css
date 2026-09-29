@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #1f1a17;
+  --paper: #ffffff;
+  --ink: #1f1a17;
+  --talk: #3e5c85;
+  --act: #3e5c85;
+  --danger: #b4234a;
+  --quiet: #eef2f6;
+  --line: #d5dde8;
+  --muted: #5c564e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-paper: var(--paper);
+  --color-quiet: var(--quiet);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.chat-shell a {
+  color: var(--talk);
+}
+
+.chat-shell {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chat-sidebar,
+.chat-header,
+.chat-transcript,
+.chat-review,
+.chat-composer {
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-sidebar {
+  flex: none;
+  overflow: auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-header,
+.chat-composer {
+  flex: none;
+}
+
+.chat-transcript {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.chat-review {
+  flex: 0 0 60dvh;
+  height: 60dvh;
+  min-height: 60dvh;
+  max-height: 60dvh;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.chat-composer {
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 64rem) {
+  .chat-shell {
+    display: grid;
+    grid-template-columns: 18rem minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "sidebar header"
+      "sidebar transcript"
+      "sidebar composer";
+  }
+
+  .chat-shell:has(.chat-review) {
+    grid-template-columns: 18rem minmax(0, 1fr) minmax(17rem, 32rem);
+    grid-template-areas:
+      "sidebar header review"
+      "sidebar transcript review"
+      "sidebar composer review";
+  }
+
+  .chat-sidebar {
+    grid-area: sidebar;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .chat-header {
+    grid-area: header;
+  }
+
+  .chat-transcript {
+    grid-area: transcript;
+  }
+
+  .chat-review {
+    grid-area: review;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  .chat-composer {
+    grid-area: composer;
+  }
+}
+
+.inbound-list a {
+  display: block;
+  color: var(--talk);
+  text-decoration: none;
+}
+
+.inbound-clip {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
