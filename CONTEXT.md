@@ -111,3 +111,15 @@ _Avoid_: regenerate, new draft
 **Prior recipient**:
 A Recipient address from a Confirmed Draft, offered as the human types a Pinned recipient. The same address appears once, most recent Confirm first, and it does not carry a person's name.
 _Avoid_: contact, contact book, Google contact, open draft, discarded draft
+
+**Evaluation case**:
+A synthetic turn: one Chat message, plus the Pinned recipient, open Drafts, and Inbound emails that turn needs. It is not a Session.
+_Avoid_: fixture, prompt, dataset row, live inbox
+
+**Turn accuracy**:
+Whether an Evaluation case passed. The Draft outcome, the Assistant reply, and the facts required of the Outbound email body match what the case requires.
+_Avoid_: exact match, latency, cost
+
+**Experiment**:
+A run of Evaluation cases. Turn accuracy decides the pass. The turn's latency and cost are kept with the run and do not decide the pass.
+_Avoid_: Session, live inbox
