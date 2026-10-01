@@ -30,10 +30,8 @@ htmlcov/
 # Local-only agent, editor, and tooling (not shared via git)
 .agents/
 .cursor/
-docs/
-AGENTS.md
-CONTEXT.md
 skills-lock.json
+web/AGENTS.md
 
 # OS
 .DS_Store

@@ -236,9 +236,6 @@ export function ChatApp() {
   const replyInFlight = useRef<Set<string>>(new Set());
   const refreshInboxRef = useRef<() => Promise<void>>(async () => undefined);
 
-  sendingRef.current = isSending;
-  draftsRef.current = reviewDrafts;
-
   function nextKey(prefix: string): string {
     keyRef.current += 1;
     return `${prefix}-${keyRef.current}`;
@@ -259,6 +256,7 @@ export function ChatApp() {
       for (const draft of drafts) {
         persistedRecipients.current.set(draft.id, draft.recipient);
       }
+      draftsRef.current = drafts;
       setReviewDrafts(drafts);
       setPriorRecipients(recipients);
       if (drafts.some((draft) => !isValidEmail(draft.recipient))) {
@@ -281,6 +279,7 @@ export function ChatApp() {
 
   function updateDraft(next: DraftCard) {
     const updated = reviewDrafts.map((item) => (item.id === next.id ? next : item));
+    draftsRef.current = updated;
     setReviewDrafts(updated);
     if (updated.some((item) => !isValidEmail(item.recipient))) {
       setAlert(INVALID_EMAIL_ALERT);
@@ -393,19 +392,21 @@ export function ChatApp() {
     maybeAutoReply(nextNotices);
   }
 
-  refreshInboxRef.current = async () => {
-    try {
-      const response = await fetch("/api/inbox?limit=10&days=7", { cache: "no-store" });
-      const data = await readJson(response);
-      if (!response.ok || !Array.isArray(data.emails)) {
+  useEffect(() => {
+    refreshInboxRef.current = async () => {
+      try {
+        const response = await fetch("/api/inbox?limit=10&days=7", { cache: "no-store" });
+        const data = await readJson(response);
+        if (!response.ok || !Array.isArray(data.emails)) {
+          applyListing(null);
+          return;
+        }
+        applyListing(data.emails.filter(isInboundEmail));
+      } catch {
         applyListing(null);
-        return;
       }
-      applyListing(data.emails.filter(isInboundEmail));
-    } catch {
-      applyListing(null);
-    }
-  };
+    };
+  });
 
   useEffect(() => {
     let timer: number | null = null;
@@ -497,6 +498,7 @@ export function ChatApp() {
     const userKey = nextKey("user");
     function restoreFailedTurn() {
       setTranscript((current) => current.filter((item) => item.key !== userKey));
+      draftsRef.current = snapshot;
       setReviewDrafts(snapshot);
       if (source === "composer") {
         setChatInput(userText);

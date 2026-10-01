@@ -186,6 +186,18 @@ npm install
 BACKEND_URL=http://localhost:8080 npm run dev
 ```
 
+## Checks
+
+`scripts/check.sh` runs the API tests, the web lint, and a check that every local image cited in the READMEs exists under `images/`. GitHub Actions runs that script on every push and pull request.
+
+To run it before each commit in this clone:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+Git then uses the tracked `scripts/hooks/pre-commit`, which calls `scripts/check.sh`. Install the API and web dependencies first. The script does not install them.
+
 ## API
 
 | Method | Endpoint | Description |

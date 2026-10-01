@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+scripts/check.sh text eol=lf
+scripts/hooks/pre-commit text eol=lf
