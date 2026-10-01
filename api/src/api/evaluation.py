@@ -1,10 +1,18 @@
-"""Score synthetic Evaluation cases. The running app does not call this."""
+"""Score synthetic Evaluation cases. The running app does not call this.
+
+The local command can run the chat turn and publish to LangSmith. The API
+process does not enable that tracing.
+"""
 
 from __future__ import annotations
 
 import os
+import sys
+import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,6 +27,27 @@ DEFAULT_INBOX = "inbox@example.com"
 SENDER_NAME = "Alex"
 PINNED_RECIPIENT = "ana@example.com"
 JUDGE_MODEL = "gpt-4o-mini"
+DATASET_NAME = "email-assistant-turns"
+LANGSMITH_PROJECT = "email-assistant"
+
+
+@dataclass
+class _PublishContext:
+    client: Any
+    project_name: str
+    example_ids: dict[str, Any]
+    run_ids: dict[str, Any]
+
+
+_publish_context: ContextVar[_PublishContext | None] = ContextVar(
+    "publish_context", default=None
+)
+
+# USD per million tokens: input, cached input, output.
+_TOKEN_RATES = {
+    "gpt-5-mini": (0.25, 0.025, 2.0),
+    "gpt-4o-mini": (0.15, 0.075, 0.6),
+}
 
 _CHECK_ORDER = (
     "turn",
@@ -134,8 +163,21 @@ class CaseScore:
 
 
 @dataclass(frozen=True)
+class CaseTrace:
+    case_id: str
+    chat_message: str
+    pinned_recipient: str | None
+    inbound_emails: tuple[InboundEmail, ...]
+    open_drafts: tuple[OpenDraft, ...]
+    assistant_reply: str
+    drafts: tuple[ObservedDraft, ...]
+    score: CaseScore
+
+
+@dataclass(frozen=True)
 class ExperimentResult:
     cases: tuple[CaseScore, ...]
+    traces: tuple[CaseTrace, ...] = ()
 
     @property
     def failed(self) -> bool:
@@ -315,8 +357,11 @@ def run_experiment(
 ) -> ExperimentResult:
     """Score each Evaluation case once. Latency and cost do not decide the pass."""
     selected = _select_cases(case_ids)
-    scores = tuple(_run_case(case, turn, judge) for case in selected)
-    return ExperimentResult(cases=scores)
+    traces = tuple(_run_case(case, turn, judge) for case in selected)
+    return ExperimentResult(
+        cases=tuple(trace.score for trace in traces),
+        traces=traces,
+    )
 
 
 def scripted_turn(context: TurnContext) -> TurnResult:
@@ -433,6 +478,187 @@ def scripted_judge(request: JudgeRequest) -> JudgeVerdict:
         reply_no_extra_offer=not offers_more,
         reply_not_sent=not claims_sent,
     )
+
+
+def chat_turn(
+    context: TurnContext,
+    *,
+    supervisor_factory: Callable[[], Any] | None = None,
+) -> TurnResult:
+    """One chat turn for an Evaluation case.
+
+    The supervisor is built inside the synthetic inbox identity, so the prompt
+    sees Alex and ``inbox@example.com``. Draft and inbox tools use the case
+    store. The call does not Confirm and does not write a Chat message.
+    """
+    publishing = _publish_context.get()
+    if publishing is None:
+        return _invoke_chat_turn(context, supervisor_factory)
+    from langsmith import trace
+
+    inputs = _context_inputs(context)
+    with trace(
+        context.case_id,
+        run_type="chain",
+        inputs=inputs,
+        client=publishing.client,
+        project_name=publishing.project_name,
+        reference_example_id=publishing.example_ids.get(context.case_id),
+    ) as run:
+        publishing.run_ids[context.case_id] = run.id
+        result = _invoke_chat_turn(context, supervisor_factory)
+        run.end(outputs=_turn_outputs(result))
+        return result
+
+
+def _invoke_chat_turn(
+    context: TurnContext,
+    supervisor_factory: Callable[[], Any] | None,
+) -> TurnResult:
+    from api.ai.tools import CaseTools, use_case_tools
+    from api.ai.turn_usage import collecting_turn_usage
+    from api.chat.turn_message import with_open_drafts
+    from api.drafts import collecting_created_drafts
+
+    factory = _default_supervisor if supervisor_factory is None else supervisor_factory
+    binding = CaseTools(
+        session=context.session,
+        default_inbox=context.default_inbox,
+        sender_name=context.sender_name,
+        inbound_emails=context.inbound_emails,
+    )
+    with _synthetic_identity():
+        supervisor = factory()
+        message = with_open_drafts(
+            context.chat_message,
+            context.open_drafts,
+            context.inbound_emails,
+        )
+        config: dict[str, Any] = {}
+        if context.pinned_recipient:
+            config["configurable"] = {"to_email": context.pinned_recipient}
+        with use_case_tools(binding):
+            with collecting_turn_usage() as (extra_usage, research_calls):
+                with collecting_created_drafts() as created:
+                    started = time.perf_counter()
+                    result = supervisor.invoke(
+                        {"messages": [{"role": "user", "content": message}]},
+                        config=config,
+                    )
+                    latency = time.perf_counter() - started
+    if not isinstance(result, dict) or not result.get("messages"):
+        raise ValueError("Supervisor returned no result")
+    messages = result["messages"]
+    from api.ai.messages import extract_assistant_reply
+
+    return TurnResult(
+        assistant_reply=extract_assistant_reply(list(messages)),
+        drafts=_observed_drafts(context.open_drafts, created),
+        research_called=bool(research_calls) or _research_called(messages),
+        latency=latency,
+        cost=_messages_cost(messages) + _messages_cost(extra_usage),
+    )
+
+
+def score_with_chat_turn() -> int:
+    """Score the five cases with the chat turn and the scripted judge."""
+    return main(chat_turn, scripted_judge)
+
+
+def _default_supervisor() -> Any:
+    from api.ai.agents import get_supervisor
+
+    return get_supervisor()
+
+
+@contextmanager
+def _synthetic_identity() -> Iterator[None]:
+    keys = ("EMAIL_ADDRESS", "EMAIL_SENDER_NAME")
+    previous = {key: os.environ.get(key) for key in keys}
+    os.environ["EMAIL_ADDRESS"] = DEFAULT_INBOX
+    os.environ["EMAIL_SENDER_NAME"] = SENDER_NAME
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _observed_drafts(
+    open_drafts: Sequence[OpenDraft],
+    created: Sequence[Any],
+) -> tuple[ObservedDraft, ...]:
+    seeded = {draft.id for draft in open_drafts}
+    observed: list[ObservedDraft] = []
+    for draft in created:
+        draft_id = str(draft.id)
+        kind = "revised" if draft_id in seeded else "created"
+        observed.append(
+            ObservedDraft(
+                id=draft_id,
+                recipient=draft.recipient,
+                subject=draft.subject,
+                body=draft.body,
+                kind=kind,
+            )
+        )
+    return tuple(observed)
+
+
+def _research_called(messages: Sequence[Any]) -> bool:
+    for message in messages:
+        if getattr(message, "name", None) == "research_email":
+            return True
+        for call in getattr(message, "tool_calls", None) or []:
+            if isinstance(call, dict) and call.get("name") == "research_email":
+                return True
+            if getattr(call, "name", None) == "research_email":
+                return True
+    return False
+
+
+def _messages_cost(messages: Sequence[Any]) -> float:
+    return sum(_message_cost(message) for message in messages)
+
+
+def _message_cost(message: Any) -> float:
+    usage = getattr(message, "usage_metadata", None)
+    if not isinstance(usage, dict):
+        return 0.0
+    rate = _rate_for(_model_name(message))
+    if rate is None:
+        return 0.0
+    input_tokens = int(usage.get("input_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    details = usage.get("input_token_details") or {}
+    cached = 0
+    if isinstance(details, dict):
+        cached = int(details.get("cache_read") or details.get("cached_tokens") or 0)
+    cached = min(max(cached, 0), input_tokens)
+    fresh = input_tokens - cached
+    input_rate, cached_rate, output_rate = rate
+    return (
+        fresh * input_rate + cached * cached_rate + output_tokens * output_rate
+    ) / 1_000_000
+
+
+def _model_name(message: Any) -> str:
+    meta = getattr(message, "response_metadata", None) or {}
+    if isinstance(meta, dict):
+        name = meta.get("model_name") or meta.get("model") or ""
+        if name:
+            return str(name)
+    return os.environ.get("OPENAI_MODEL_NAME") or ""
+
+
+def _rate_for(model_name: str) -> tuple[float, float, float] | None:
+    for key in sorted(_TOKEN_RATES, key=len, reverse=True):
+        if model_name.startswith(key):
+            return _TOKEN_RATES[key]
+    return None
 
 
 def model_judge(
@@ -575,7 +801,7 @@ def _select_cases(case_ids: Sequence[str] | None) -> tuple[_Case, ...]:
     return tuple(selected)
 
 
-def _run_case(case: _Case, turn: Turn, judge: Judge) -> CaseScore:
+def _run_case(case: _Case, turn: Turn, judge: Judge) -> CaseTrace:
     session = _case_session()
     try:
         _seed_open_drafts(session, case.open_drafts)
@@ -592,12 +818,31 @@ def _run_case(case: _Case, turn: Turn, judge: Judge) -> CaseScore:
         try:
             result = turn(context)
         except Exception:
-            return _case_score(case.id, ("turn",), 0, 0)
+            return _trace(case, "", (), _case_score(case.id, ("turn",), 0, 0))
         if not isinstance(result, TurnResult):
-            return _case_score(case.id, ("turn",), 0, 0)
-        return _score_case(case, result, judge)
+            return _trace(case, "", (), _case_score(case.id, ("turn",), 0, 0))
+        score = _score_case(case, result, judge)
+        return _trace(case, result.assistant_reply, result.drafts, score)
     finally:
         discard_open_drafts(session)
+
+
+def _trace(
+    case: _Case,
+    reply: str,
+    drafts: Sequence[ObservedDraft],
+    score: CaseScore,
+) -> CaseTrace:
+    return CaseTrace(
+        case_id=case.id,
+        chat_message=case.chat_message,
+        pinned_recipient=case.pinned_recipient,
+        inbound_emails=case.inbound_emails,
+        open_drafts=case.open_drafts,
+        assistant_reply=reply,
+        drafts=tuple(drafts),
+        score=score,
+    )
 
 
 def _case_session() -> Session:
@@ -758,6 +1003,244 @@ def _format_line(case: CaseScore) -> str:
 def _format_metric(value: float) -> str:
     text = format(value, "f").rstrip("0").rstrip(".")
     return text or "0"
+
+
+def langsmith_client() -> Any:
+    """LangSmith client for the local command. Tracing stays off."""
+    api_key = os.environ.get("LANGSMITH_API_KEY")
+    if not api_key:
+        raise NotImplementedError("LANGSMITH_API_KEY is required")
+    from langsmith import Client
+
+    return Client(api_key=api_key)
+
+
+def publish_experiment(experiment: ExperimentResult, client: Any) -> str:
+    """Upsert the cases into the dataset and open one new Experiment."""
+    dataset = _upsert_dataset(client)
+    example_ids = _upsert_examples(client, dataset.id, experiment.traces)
+    project_name = _experiment_name()
+    client.create_project(
+        project_name=project_name,
+        reference_dataset_id=dataset.id,
+        description="Synthetic Evaluation cases",
+        metadata={"langsmith_project": _langsmith_project()},
+    )
+    for trace in experiment.traces:
+        _publish_trace(client, project_name, example_ids[trace.case_id], trace)
+    return project_name
+
+
+def run_local_experiment(
+    turn: Turn | None = None,
+    judge: Judge | None = None,
+    *,
+    client_factory: Callable[[], Any] | None = None,
+) -> int:
+    """Chat turn, model judge, then one LangSmith Experiment."""
+    chosen_turn = chat_turn if turn is None else turn
+    chosen_judge = model_judge() if judge is None else judge
+    factory = langsmith_client if client_factory is None else client_factory
+    if chosen_turn is chat_turn:
+        return _run_traced_experiment(factory(), chosen_judge)
+    experiment = run_experiment(chosen_turn, chosen_judge)
+    for case in experiment.cases:
+        print(_format_line(case))
+    publish_experiment(experiment, factory())
+    return 1 if experiment.failed else 0
+
+
+def _run_traced_experiment(client: Any, judge: Judge) -> int:
+    """Trace each chat turn, then attach the score. The judge stays outside."""
+    dataset = _upsert_dataset(client)
+    example_ids = _upsert_examples(client, dataset.id, _CANONICAL_CASES)
+    project_name = _experiment_name()
+    client.create_project(
+        project_name=project_name,
+        reference_dataset_id=dataset.id,
+        description="Synthetic Evaluation cases",
+        metadata={"langsmith_project": _langsmith_project()},
+    )
+    publishing = _PublishContext(
+        client=client,
+        project_name=project_name,
+        example_ids=example_ids,
+        run_ids={},
+    )
+    token = _publish_context.set(publishing)
+    try:
+        experiment = run_experiment(chat_turn, judge)
+    finally:
+        _publish_context.reset(token)
+    for case in experiment.cases:
+        print(_format_line(case))
+    for trace in experiment.traces:
+        run_id = publishing.run_ids.get(trace.case_id)
+        if run_id is None:
+            _publish_trace(client, project_name, example_ids[trace.case_id], trace)
+            continue
+        client.update_run(run_id, outputs=_trace_outputs(trace))
+        _feedback(client, run_id, trace.score)
+    return 1 if experiment.failed else 0
+
+
+def local_command(argv: Sequence[str] | None = None) -> int:
+    """Entry for ``api/experiment.py``.
+
+    ``--scripted-judge`` scores the chat turn with the scripted judge and
+    does not call LangSmith.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--scripted-judge" in args:
+        return score_with_chat_turn()
+    return run_local_experiment()
+
+
+def _upsert_dataset(client: Any) -> Any:
+    if client.has_dataset(dataset_name=DATASET_NAME):
+        return client.read_dataset(dataset_name=DATASET_NAME)
+    return client.create_dataset(
+        dataset_name=DATASET_NAME,
+        description="Synthetic Evaluation cases from git",
+    )
+
+
+def _upsert_examples(client: Any, dataset_id: Any, cases: Sequence[Any]) -> dict[str, Any]:
+    existing: dict[str, Any] = {}
+    for example in client.list_examples(dataset_id=dataset_id):
+        case_id = _example_case_id(example)
+        if case_id and case_id not in existing:
+            existing[case_id] = example
+    ids: dict[str, Any] = {}
+    for case in cases:
+        case_id = _case_key(case)
+        inputs = _context_inputs(case)
+        metadata = {"case_id": case_id}
+        current = existing.get(case_id)
+        if current is None:
+            created = client.create_example(
+                inputs=inputs,
+                dataset_id=dataset_id,
+                metadata=metadata,
+            )
+            ids[case_id] = created.id
+        else:
+            client.update_example(current.id, inputs=inputs, metadata=metadata)
+            ids[case_id] = current.id
+    return ids
+
+
+def _publish_trace(client: Any, project_name: str, example_id: Any, trace: CaseTrace) -> None:
+    run_id = uuid.uuid4()
+    started = datetime.now(timezone.utc)
+    ended = started + timedelta(seconds=trace.score.latency)
+    client.create_run(
+        name=trace.case_id,
+        inputs=_trace_inputs(trace),
+        run_type="chain",
+        project_name=project_name,
+        outputs=_trace_outputs(trace),
+        reference_example_id=example_id,
+        id=run_id,
+        start_time=started,
+        end_time=ended,
+    )
+    _feedback(client, run_id, trace.score)
+
+
+def _feedback(client: Any, run_id: Any, score: CaseScore) -> None:
+    client.create_feedback(run_id, "turn_accuracy", score=score.turn_accuracy)
+    client.create_feedback(run_id, "latency", score=score.latency)
+    client.create_feedback(run_id, "cost", score=score.cost)
+    client.create_feedback(
+        run_id,
+        "failed_checks",
+        score=0 if score.failed_checks else 1,
+        comment=",".join(score.failed_checks),
+    )
+
+
+def _case_key(case: Any) -> str:
+    if getattr(case, "case_id", None):
+        return str(case.case_id)
+    return str(case.id)
+
+
+def _context_inputs(case: Any) -> dict[str, Any]:
+    from api.chat.turn_message import inbound_record
+
+    return {
+        "case_id": _case_key(case),
+        "chat_message": case.chat_message,
+        "pinned_recipient": case.pinned_recipient,
+        "default_inbox": DEFAULT_INBOX,
+        "sender_name": SENDER_NAME,
+        "inbound_emails": [inbound_record(item) for item in case.inbound_emails],
+        "open_drafts": [_open_draft_input(item) for item in case.open_drafts],
+    }
+
+
+def _turn_outputs(result: TurnResult) -> dict[str, Any]:
+    return {
+        "assistant_reply": result.assistant_reply,
+        "drafts": [_observed_input(item) for item in result.drafts],
+        "latency": result.latency,
+        "cost": result.cost,
+    }
+
+
+def _trace_inputs(trace: CaseTrace) -> dict[str, Any]:
+    return _context_inputs(trace)
+
+
+def _trace_outputs(trace: CaseTrace) -> dict[str, Any]:
+    score = trace.score
+    return {
+        "assistant_reply": trace.assistant_reply,
+        "drafts": [_observed_input(item) for item in trace.drafts],
+        "turn_accuracy": score.turn_accuracy,
+        "failed_checks": list(score.failed_checks),
+        "latency": score.latency,
+        "cost": score.cost,
+    }
+
+
+def _open_draft_input(draft: OpenDraft) -> dict[str, str]:
+    return {
+        "id": draft.id,
+        "recipient": draft.recipient,
+        "subject": draft.subject,
+        "body": draft.body,
+    }
+
+
+def _observed_input(draft: ObservedDraft) -> dict[str, str]:
+    return {
+        "id": draft.id,
+        "recipient": draft.recipient,
+        "subject": draft.subject,
+        "body": draft.body,
+        "kind": draft.kind,
+    }
+
+
+def _example_case_id(example: Any) -> str | None:
+    metadata = getattr(example, "metadata", None) or {}
+    if isinstance(metadata, dict) and metadata.get("case_id"):
+        return str(metadata["case_id"])
+    inputs = getattr(example, "inputs", None) or {}
+    if isinstance(inputs, dict) and inputs.get("case_id"):
+        return str(inputs["case_id"])
+    return None
+
+
+def _langsmith_project() -> str:
+    configured = (os.environ.get("LANGSMITH_PROJECT") or "").strip()
+    return configured or LANGSMITH_PROJECT
+
+
+def _experiment_name() -> str:
+    return f"{_langsmith_project()}-{uuid.uuid4().hex[:12]}"
 
 
 if __name__ == "__main__":

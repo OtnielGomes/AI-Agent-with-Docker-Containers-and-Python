@@ -3,20 +3,73 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Annotated
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Annotated, Any
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolArg, tool
 from sqlmodel import Session
 
-from api.ai.services import generate_email_message
-from api.db import engine
+from api.chat.turn_message import inbound_record
 from api.drafts import create_open_draft, remember_reply_target, revise_open_draft
 from api.myemailer.inbox_reader import read_inbox
 
 
 _MAX_BODY_CHARS = 1500
 _MAX_TOOL_OUTPUT_CHARS = 12000
+
+
+@dataclass(frozen=True)
+class CaseTools:
+    """Draft store and inbox for one Evaluation case."""
+
+    session: Session
+    default_inbox: str
+    sender_name: str
+    inbound_emails: tuple[Any, ...]
+
+
+_case_tools: ContextVar[CaseTools | None] = ContextVar("case_tools", default=None)
+
+
+@contextmanager
+def use_case_tools(binding: CaseTools) -> Iterator[None]:
+    """Point the inbox and Draft tools at one case. The mailbox stays closed."""
+    token = _case_tools.set(binding)
+    try:
+        yield
+    finally:
+        _case_tools.reset(token)
+
+
+def _tool_session():
+    binding = _case_tools.get()
+    if binding is not None:
+        return nullcontext(binding.session)
+    from api.db import engine
+
+    return Session(engine)
+
+
+def _draft_defaults() -> tuple[str | None, str | None]:
+    binding = _case_tools.get()
+    if binding is not None:
+        return binding.default_inbox, binding.sender_name
+    return os.environ.get("EMAIL_ADDRESS"), os.environ.get("EMAIL_SENDER_NAME")
+
+
+def _case_inbox(unread_only: bool) -> list[dict] | None:
+    """The case list is the whole inbox. None means this is not a case."""
+    binding = _case_tools.get()
+    if binding is None:
+        return None
+    chosen = binding.inbound_emails
+    if unread_only:
+        chosen = tuple(item for item in chosen if getattr(item, "unread", True))
+    return [inbound_record(item) for item in chosen]
 
 
 def _format_emails_for_tool(emails: list[dict]) -> str:
@@ -48,10 +101,10 @@ def research_email(query:str):
     Args:
         query: The query to research.
     """
-    #print(config)
-    #metadata = config.get("metadata",)
-    #add_field = metadata.get("additional_field")
-    #print("add_field",add_field)
+    from api.ai.services import generate_email_message
+    from api.ai.turn_usage import mark_research_called
+
+    mark_research_called()
     response = generate_email_message(query)
     msg = f"Subject: {response.subject}:\nBody: {response.contents}"
 
@@ -85,15 +138,16 @@ def send_me_email(
         pinned = None
         if config and not reply:
             pinned = config.get("configurable", {}).get("to_email")
-        with Session(engine) as session:
+        default_inbox, sender_name = _draft_defaults()
+        with _tool_session() as session:
             draft = create_open_draft(
                 session,
                 subject=subject,
                 body=content,
                 pinned=pinned,
                 named=to_email,
-                default=os.environ.get("EMAIL_ADDRESS"),
-                sender_name=os.environ.get("EMAIL_SENDER_NAME"),
+                default=default_inbox,
+                sender_name=sender_name,
                 ignore_pinned=reply,
             )
         if reply:
@@ -133,14 +187,15 @@ def revise_email_draft(
     except ValueError:
         return f"Error revising email draft: invalid id {draft_id}"
     try:
-        with Session(engine) as session:
+        _, sender_name = _draft_defaults()
+        with _tool_session() as session:
             draft = revise_open_draft(
                 session,
                 parsed_id,
                 subject=subject,
                 body=content,
                 recipient=_optional_recipient(recipient),
-                sender_name=os.environ.get("EMAIL_SENDER_NAME"),
+                sender_name=sender_name,
             )
     except Exception as e:
         return f"Error revising email draft: {e}"
@@ -164,6 +219,9 @@ def get_recent_emails(
         hours_ago: How far back to search, in hours (default 7 days).
         unread_only: If True, return only unread emails.
     """
+    case_emails = _case_inbox(unread_only)
+    if case_emails is not None:
+        return _format_emails_for_tool(case_emails[:limit])
     try:
         emails = read_inbox(
             hours_ago=hours_ago,
@@ -185,6 +243,9 @@ def get_unread_emails(hours_ago: int = 48) -> str:
     Args:
         hours_ago: The number of hours ago to get unread emails from.
     """
+    case_emails = _case_inbox(True)
+    if case_emails is not None:
+        return _format_emails_for_tool(case_emails)
     try:
         emails = read_inbox(
             hours_ago=hours_ago,

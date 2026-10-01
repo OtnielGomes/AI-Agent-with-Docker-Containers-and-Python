@@ -149,6 +149,8 @@ No PowerShell: `Copy-Item .env.example .env`
 | `EMAIL_PORT` | Não | Padrão `465` |
 | `EMAIL_SENDER_NAME` | Não | Nome exibido na assinatura |
 | `BACKEND_URL` | Não | URL da API para a interface |
+| `LANGSMITH_API_KEY` | Não | Chave do LangSmith para o comando local do Experimento |
+| `LANGSMITH_PROJECT` | Não | Projeto LangSmith desse comando (`email-assistant`). Não liga o rastreio da API |
 
 \* Obrigatórias para caixa, rascunho e envio.
 

@@ -149,6 +149,8 @@ On PowerShell: `Copy-Item .env.example .env`
 | `EMAIL_PORT` | No | Default `465` |
 | `EMAIL_SENDER_NAME` | No | Display name on the sign-off |
 | `BACKEND_URL` | No | API URL for the chat UI |
+| `LANGSMITH_API_KEY` | No | LangSmith key for the local Experiment command |
+| `LANGSMITH_PROJECT` | No | LangSmith project for that command (`email-assistant`). Does not turn on tracing for the API |
 
 \* Required for inbox, drafts, and sending.
 

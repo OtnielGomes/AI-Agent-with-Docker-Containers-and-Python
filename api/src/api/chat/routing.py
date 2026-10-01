@@ -9,9 +9,8 @@ from .models import (
     ChatMenssagePayload,
     ChatMessage,
     ChatMessage_listItem,
-    InboundEmailSnapshot,
-    OpenDraftSnapshot,
 )
+from .turn_message import with_open_drafts
 from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
@@ -22,55 +21,6 @@ from api.drafts import (
     collecting_reply_targets,
 )
 from api.myemailer.recipient import validated_recipient
-
-def _with_open_drafts(
-    message: str,
-    open_drafts: list[OpenDraftSnapshot],
-    inbound_emails: list[InboundEmailSnapshot],
-) -> str:
-    """Give the model the review cards for this turn, oldest first."""
-    if not open_drafts:
-        return _with_inbound_emails(
-            f"{message}\n\nOpen Drafts on the review cards: none.",
-            inbound_emails,
-        )
-
-    blocks: list[str] = []
-    for index, draft in enumerate(open_drafts, start=1):
-        blocks.append(
-            f"{index}. id: {draft.id}\n"
-            f"subject: {draft.subject}\n"
-            f"recipient: {draft.recipient}\n"
-            f"body:\n{draft.body}"
-        )
-    listed = "\n\n".join(blocks)
-    message = (
-        f"{message}\n\n"
-        "Open Drafts on the review cards, oldest at the top:\n\n"
-        f"{listed}"
-    )
-    return _with_inbound_emails(message, inbound_emails)
-
-
-def _with_inbound_emails(message: str, inbound_emails: list[InboundEmailSnapshot]) -> str:
-    if not inbound_emails:
-        return message
-    blocks: list[str] = []
-    for item in inbound_emails:
-        blocks.append(
-            f"id: {item.id}\n"
-            f"sender: {item.sender}\n"
-            f"address: {item.address}\n"
-            f"subject: {item.subject}\n"
-            f"date: {item.date}\n"
-            f"body:\n{item.body}"
-        )
-    listed = "\n\n".join(blocks)
-    return (
-        f"{message}\n\n"
-        "Inbound emails in the inbox list, newest first:\n\n"
-        f"{listed}"
-    )
 
 
 # Router:
@@ -130,7 +80,7 @@ def chat_create_message(
         "messages": [
             {
                 "role": "user",
-                "content": _with_open_drafts(
+                "content": with_open_drafts(
                     payload.message, payload.open_drafts, payload.inbound_emails
                 ),
             },
