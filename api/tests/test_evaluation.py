@@ -1,6 +1,7 @@
 """Score Evaluation cases through the Experiment, with a scripted turn and judge."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import inspect
@@ -8,9 +9,12 @@ from sqlmodel import Session, create_engine
 
 from api.drafts import create_open_draft, list_open_drafts
 from api.evaluation import (
+    JudgeRequest,
     JudgeVerdict,
     TurnContext,
     main,
+    model_judge,
+    score_with_model_judge,
     run_experiment,
     scripted_judge,
     scripted_turn,
@@ -563,6 +567,235 @@ def test_scripted_judge_fails_an_offer_of_further_work_and_a_sent_claim():
     )
 
 
+def _model_answer(**overrides):
+    fields = {
+        "body_facts": True,
+        "reply_ready": True,
+        "reply_no_extra_offer": True,
+        "reply_not_sent": True,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def _recording_chat_factory(seen):
+    class FakeChat:
+        def with_structured_output(self, schema):
+            seen["schema"] = schema
+            return self
+
+        def invoke(self, messages):
+            seen["messages"] = messages
+            return _model_answer()
+
+    def factory(**kwargs):
+        seen["kwargs"] = kwargs
+        return FakeChat()
+
+    return factory
+
+
+def test_model_judge_passes_a_fact_stated_in_different_words():
+    result = _passing("pin-wins")
+    paraphrased = replace(
+        result,
+        drafts=(
+            replace(
+                result.drafts[0],
+                body=(
+                    "Olá, João,\n\n"
+                    "A reunião foi adiada para o último dia útil da semana.\n\n"
+                    "Até mais!"
+                ),
+            ),
+        ),
+    )
+    seen = {}
+
+    def complete(request):
+        seen["request"] = request
+        return _model_answer()
+
+    score = _score_break(
+        "pin-wins",
+        paraphrased,
+        judge=model_judge(answer=complete),
+    )
+
+    assert seen["request"].fact_propositions == ("the meeting moved to Friday",)
+    assert "último dia útil" in seen["request"].outbound_email_body
+    assert seen["request"].assistant_reply == result.assistant_reply
+    assert seen["request"].draft_required is True
+    assert score.failed_checks == ()
+    assert score.turn_accuracy == 1
+    assert _score_break(
+        "pin-wins", paraphrased, judge=scripted_judge
+    ).failed_checks == ("body-facts",)
+
+
+def test_model_judge_fails_body_facts_when_the_model_says_the_fact_is_missing():
+    def complete(_request):
+        return _model_answer(body_facts=False)
+
+    score = _score_break(
+        "pin-wins",
+        _passing("pin-wins"),
+        judge=model_judge(answer=complete),
+    )
+
+    assert score.failed_checks == ("body-facts",)
+    assert score.turn_accuracy == 0
+
+
+@pytest.mark.parametrize(
+    ("case_id", "flag", "failed"),
+    [
+        ("pin-wins", "reply_ready", ("reply-ready",)),
+        ("ambiguous-reply", "reply_ready", ("reply-ready",)),
+        ("pin-wins", "reply_no_extra_offer", ("reply-no-extra-offer",)),
+        ("pin-wins", "reply_not_sent", ("reply-not-sent",)),
+    ],
+)
+def test_model_judge_reports_the_reply_check_the_model_fails(case_id, flag, failed):
+    def complete(_request):
+        return _model_answer(**{flag: False})
+
+    score = _score_break(
+        case_id,
+        _passing(case_id),
+        judge=model_judge(answer=complete),
+    )
+
+    assert score.failed_checks == failed
+    assert score.turn_accuracy == 0
+
+
+def test_unreadable_model_answer_scores_judge_and_the_run_continues():
+    def complete(request):
+        if request.case_id == "pin-wins":
+            return "maybe"
+        return _model_answer()
+
+    experiment = run_experiment(
+        scripted_turn,
+        model_judge(answer=complete),
+        case_ids=("pin-wins", "ambiguous-reply"),
+    )
+
+    assert experiment.cases[0].turn_accuracy == 0
+    assert experiment.cases[0].failed_checks == ("judge",)
+    assert experiment.cases[1].turn_accuracy == 1
+    assert experiment.failed is True
+
+
+def test_missing_judge_credentials_score_judge_and_the_run_continues(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    experiment = run_experiment(
+        scripted_turn,
+        model_judge(),
+        case_ids=("pin-wins", "ambiguous-reply"),
+    )
+
+    assert experiment.cases[0].turn_accuracy == 0
+    assert experiment.cases[0].failed_checks == ("judge",)
+    assert experiment.cases[1].turn_accuracy == 0
+    assert experiment.cases[1].failed_checks == ("judge",)
+    assert experiment.failed is True
+
+
+def test_model_judge_rejects_a_non_boolean_answer():
+    def complete(_request):
+        return _model_answer(body_facts="yes")
+
+    score = _score_break(
+        "pin-wins",
+        _passing("pin-wins"),
+        judge=model_judge(answer=complete),
+    )
+
+    assert score.failed_checks == ("judge",)
+    assert score.turn_accuracy == 0
+
+
+def test_command_judge_uses_gpt_4o_mini_on_the_assistant_credentials(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-assistant")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://assistant.example/v1")
+    monkeypatch.setenv("OPENAI_MODEL_NAME", "gpt-5-mini")
+    seen = {}
+
+    experiment = run_experiment(
+        scripted_turn,
+        model_judge(client_factory=_recording_chat_factory(seen)),
+        case_ids=("pin-wins",),
+    )
+
+    assert experiment.cases[0].turn_accuracy == 1
+    assert seen["kwargs"] == {
+        "model": "gpt-4o-mini",
+        "api_key": "sk-assistant",
+        "base_url": "http://assistant.example/v1",
+    }
+    assert set(seen["schema"].model_fields) == {
+        "body_facts",
+        "reply_ready",
+        "reply_no_extra_offer",
+        "reply_not_sent",
+    }
+    text = _message_text(seen["messages"])
+    assert "the meeting moved to Friday" in text
+    assert "A reunião passou para sexta." in text
+    assert "O rascunho está pronto para ana@example.com." in text
+
+
+def test_command_judge_omits_base_url_when_the_assistant_has_none(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-assistant")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL_NAME", "gpt-5-mini")
+    seen = {}
+
+    model_judge(client_factory=_recording_chat_factory(seen))(
+        JudgeRequest(
+            case_id="research",
+            fact_propositions=(
+                "it describes steps to make a latte",
+                "it mentions milk",
+                "it mentions espresso",
+            ),
+            outbound_email_body=None,
+            assistant_reply="O rascunho está pronto para ana@example.com.",
+            draft_required=True,
+        )
+    )
+
+    assert seen["kwargs"] == {
+        "model": "gpt-4o-mini",
+        "api_key": "sk-assistant",
+    }
+
+
+def test_local_command_asks_the_model_judge(monkeypatch, capsys):
+    def fake_judge(_request):
+        return PASSING_JUDGE
+
+    monkeypatch.setattr("api.evaluation.model_judge", lambda: fake_judge)
+
+    assert score_with_model_judge() == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [line.split()[1] for line in lines] == ["1", "1", "1", "1", "1"]
+
+
+def test_regular_check_scores_with_the_scripted_judge(monkeypatch, capsys):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("regular check called the model judge")
+
+    monkeypatch.setattr("api.evaluation.model_judge", boom)
+
+    assert main() == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [line.split()[1] for line in lines] == ["1", "1", "1", "1", "1"]
+
+
 def test_command_prints_one_line_per_case_and_exits_success_when_all_pass(capsys):
     code = main()
     captured = capsys.readouterr()
@@ -572,6 +805,40 @@ def test_command_prints_one_line_per_case_and_exits_success_when_all_pass(capsys
     assert [line.split()[0] for line in lines] == list(_CASE_ORDER)
     assert [line.split()[1] for line in lines] == ["1", "1", "1", "1", "1"]
     assert all(" - " in line for line in lines)
+
+
+def test_judge_latency_and_cost_stay_outside_the_turn():
+    def turn(context):
+        result = scripted_turn(context)
+        return replace(result, latency=4.5, cost=0.33)
+
+    def judge(request):
+        return PASSING_JUDGE
+
+    experiment = run_experiment(turn, judge, case_ids=("pin-wins",))
+    score = experiment.cases[0]
+
+    assert score.turn_accuracy == 1
+    assert score.latency == 4.5
+    assert score.cost == 0.33
+
+
+def test_unreadable_judge_answer_scores_judge_and_the_run_continues():
+    calls = []
+
+    def judge(request):
+        calls.append(request.case_id)
+        if request.case_id == "pin-wins":
+            return "not a verdict"
+        return PASSING_JUDGE
+
+    experiment = run_experiment(scripted_turn, judge)
+
+    assert calls == list(_CASE_ORDER)
+    assert experiment.cases[0].turn_accuracy == 0
+    assert experiment.cases[0].failed_checks == ("judge",)
+    assert experiment.cases[1].turn_accuracy == 1
+    assert experiment.failed is True
 
 
 def test_command_exits_failure_after_printing_every_case(capsys):
@@ -593,3 +860,13 @@ def test_command_exits_failure_after_printing_every_case(capsys):
 
 def _nonempty(body: str) -> list[str]:
     return [line.strip() for line in body.splitlines() if line.strip()]
+
+
+def _message_text(messages) -> str:
+    parts = []
+    for message in messages:
+        if isinstance(message, tuple):
+            parts.append(str(message[1]))
+        else:
+            parts.append(str(getattr(message, "content", message)))
+    return "\n".join(parts)

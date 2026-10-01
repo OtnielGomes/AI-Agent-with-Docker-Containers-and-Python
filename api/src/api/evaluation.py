@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
+from pydantic import BaseModel
 from sqlmodel import Session, SQLModel, create_engine
 
 from api.drafts import DRAFT_OPEN, Draft, discard_open_drafts
@@ -15,6 +18,7 @@ from api.inbound_mail import guess_language
 DEFAULT_INBOX = "inbox@example.com"
 SENDER_NAME = "Alex"
 PINNED_RECIPIENT = "ana@example.com"
+JUDGE_MODEL = "gpt-4o-mini"
 
 _CHECK_ORDER = (
     "turn",
@@ -107,6 +111,13 @@ class JudgeRequest:
 
 @dataclass(frozen=True)
 class JudgeVerdict:
+    body_facts: bool
+    reply_ready: bool
+    reply_no_extra_offer: bool
+    reply_not_sent: bool
+
+
+class _JudgeAnswer(BaseModel):
     body_facts: bool
     reply_ready: bool
     reply_no_extra_offer: bool
@@ -424,6 +435,35 @@ def scripted_judge(request: JudgeRequest) -> JudgeVerdict:
     )
 
 
+def model_judge(
+    *,
+    answer: Callable[[JudgeRequest], Any] | None = None,
+    client_factory: Callable[..., Any] | None = None,
+) -> Judge:
+    """Judge with gpt-4o-mini, using the assistant's API key and base URL.
+
+    A caller may pass ``answer`` or ``client_factory`` so the regular check
+    never calls the model. The assistant's model setting is ignored.
+    The client opens on the first case, so a failure scores that case and
+    the other cases still run.
+    """
+    if answer is None:
+        answer = _live_answer(client_factory)
+
+    def judge(request: JudgeRequest) -> JudgeVerdict:
+        verdict = _verdict_from(answer(request))
+        if verdict is None:
+            raise ValueError("Unreadable judge answer")
+        return verdict
+
+    return judge
+
+
+def score_with_model_judge() -> int:
+    """Score the five cases with the scripted turn and the model judge."""
+    return main(judge=model_judge())
+
+
 def main(turn: Turn | None = None, judge: Judge | None = None) -> int:
     """Print one line per case and return a failing status when any case scores 0."""
     experiment = run_experiment(
@@ -433,6 +473,86 @@ def main(turn: Turn | None = None, judge: Judge | None = None) -> int:
     for case in experiment.cases:
         print(_format_line(case))
     return 1 if experiment.failed else 0
+
+
+_VERDICT_FIELDS = (
+    "body_facts",
+    "reply_ready",
+    "reply_no_extra_offer",
+    "reply_not_sent",
+)
+
+_JUDGE_INSTRUCTIONS = (
+    "Judge one email assistant turn. "
+    "body_facts is true only when every fact proposition is stated in the "
+    "outbound email body, including when the wording differs. "
+    "It is true when there are no fact propositions, and false when a required "
+    "fact is missing or there is no body. "
+    "When a draft was required, reply_ready is true only if the assistant reply "
+    "says the draft is ready. "
+    "When no draft was required, reply_ready is true only if the reply does not "
+    "say a draft is ready. "
+    "reply_no_extra_offer is false when the reply offers further work. "
+    "reply_not_sent is false when the reply claims the email was sent."
+)
+
+
+def _live_answer(client_factory: Callable[..., Any] | None):
+    structured = None
+
+    def answer(request: JudgeRequest):
+        nonlocal structured
+        if structured is None:
+            factory = client_factory or _chat_openai
+            client = factory(**_judge_client_params())
+            structured = client.with_structured_output(_JudgeAnswer)
+        return structured.invoke(
+            [
+                ("system", _JUDGE_INSTRUCTIONS),
+                ("human", _judge_case_text(request)),
+            ]
+        )
+
+    return answer
+
+
+def _chat_openai(**kwargs):
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(**kwargs)
+
+
+def _judge_client_params() -> dict[str, str]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise NotImplementedError("OPENAI_API_KEY is required")
+    params = {"model": JUDGE_MODEL, "api_key": api_key}
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    if base_url:
+        params["base_url"] = base_url
+    return params
+
+
+def _judge_case_text(request: JudgeRequest) -> str:
+    facts = "\n".join(f"- {fact}" for fact in request.fact_propositions)
+    if request.outbound_email_body is None:
+        body = "(none)"
+    else:
+        body = request.outbound_email_body
+    required = "yes" if request.draft_required else "no"
+    return (
+        f"fact propositions:\n{facts}\n\n"
+        f"draft required: {required}\n\n"
+        f"outbound email body:\n{body}\n\n"
+        f"assistant reply:\n{request.assistant_reply}"
+    )
+
+
+def _verdict_from(raw: Any) -> JudgeVerdict | None:
+    values = {name: getattr(raw, name, None) for name in _VERDICT_FIELDS}
+    if any(type(value) is not bool for value in values.values()):
+        return None
+    return JudgeVerdict(**values)
 
 
 def _fact_present(fact: str, body: str) -> bool:
