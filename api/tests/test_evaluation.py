@@ -503,6 +503,109 @@ def test_a_judge_check_is_listed_only_when_it_applies(case_id, verdict, failed):
     assert score.turn_accuracy == (0 if failed else 1)
 
 
+def _with_body(case_id: str, body: str):
+    result = _passing(case_id)
+    return replace(result, drafts=(replace(result.drafts[0], body=body),))
+
+
+@pytest.mark.parametrize(
+    ("case_id", "body"),
+    [
+        (
+            "research",
+            "Olá,\n\n"
+            "Etapas de um latte: aqueça o leite e extraia o espresso.\n\n"
+            "Até mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\n"
+            "Passos de um latte: aqueça o leite e extraia o expresso.\n\n"
+            "Até mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\n"
+            "Etapas de um latte: aqueça o leite e extraia o expresso.\n\n"
+            "Até mais!",
+        ),
+        (
+            "identified-reply",
+            "Olá, Marina,\n\nO contrato segue para assinar.\n\nAté mais!",
+        ),
+        (
+            "identified-reply",
+            "Olá, Marina,\n\nO contrato segue assinado.\n\nAté mais!",
+        ),
+        (
+            "pin-wins",
+            "Olá, João,\n\nA reunião passou para sexta-feira.\n\nAté mais!",
+        ),
+        (
+            "revision",
+            "Olá, Ana,\n\nA reunião está marcada para quinta-feira.\n\nAté mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\n"
+            "Etapas de um latte: aqueça o Leite e extraia o Espresso.\n\n"
+            "Até mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\n"
+            "ETAPAS de um latte: aqueça o LEITE e extraia o EXPRESSO.\n\n"
+            "Até mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\n"
+            "Os passos para o latte usam leite e espresso no preparo.\n\n"
+            "Até mais!",
+        ),
+    ],
+)
+def test_scripted_judge_accepts_one_wording_of_each_required_fact(case_id, body):
+    score = _score_break(case_id, _with_body(case_id, body), judge=scripted_judge)
+
+    assert score.turn_accuracy == 1
+    assert score.failed_checks == ()
+
+
+@pytest.mark.parametrize(
+    ("case_id", "body"),
+    [
+        (
+            "research",
+            "Olá,\n\nAqueça o leite e extraia o espresso.\n\nAté mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\nPassos de um latte: extraia o espresso.\n\nAté mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\nPassos de um latte: aqueça o leite.\n\nAté mais!",
+        ),
+        (
+            "research",
+            "Olá,\n\nAqueça o leite.\n\nAté mais!",
+        ),
+        (
+            "identified-reply",
+            "Olá, Marina,\n\nO contrato segue para assiná-lo.\n\nAté mais!",
+        ),
+    ],
+)
+def test_scripted_judge_lists_body_facts_when_a_fact_has_no_accepted_wording(
+    case_id, body
+):
+    score = _score_break(case_id, _with_body(case_id, body), judge=scripted_judge)
+
+    assert score.turn_accuracy == 0
+    assert score.failed_checks == ("body-facts",)
+
+
 def test_scripted_judge_fails_a_body_that_omits_the_friday_move():
     result = _passing("pin-wins")
     broken = replace(

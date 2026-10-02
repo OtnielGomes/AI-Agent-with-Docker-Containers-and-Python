@@ -69,14 +69,14 @@ _CHECK_ORDER = (
     "judge",
 )
 
-_FACT_MARKERS = {
-    "the meeting moved to Friday": "sexta",
-    "the meeting is on Thursday": "quinta",
-    "it mentions the contract": "contrato",
-    "it mentions the signature": "assinatura",
-    "it describes steps to make a latte": "passos",
-    "it mentions milk": "leite",
-    "it mentions espresso": "espresso",
+_ACCEPTED_WORDINGS = {
+    "the meeting moved to Friday": ("sexta",),
+    "the meeting is on Thursday": ("quinta",),
+    "it mentions the contract": ("contrato",),
+    "it mentions the signature": ("assinatura", "assinar", "assinado"),
+    "it describes steps to make a latte": ("passos", "etapas"),
+    "it mentions milk": ("leite",),
+    "it mentions espresso": ("espresso", "expresso"),
 }
 
 
@@ -782,10 +782,10 @@ def _verdict_from(raw: Any) -> JudgeVerdict | None:
 
 
 def _fact_present(fact: str, body: str) -> bool:
-    marker = _FACT_MARKERS.get(fact)
-    if marker is None:
+    wordings = _ACCEPTED_WORDINGS.get(fact)
+    if not wordings:
         return False
-    return marker.casefold() in body
+    return any(wording.casefold() in body for wording in wordings)
 
 
 def _select_cases(case_ids: Sequence[str] | None) -> tuple[_Case, ...]:

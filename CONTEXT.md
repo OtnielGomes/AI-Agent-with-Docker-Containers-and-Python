@@ -120,6 +120,18 @@ _Avoid_: fixture, prompt, dataset row, live inbox
 Whether an Evaluation case passed. The Draft outcome, the Assistant reply, and the facts required of the Outbound email body match what the case requires.
 _Avoid_: exact match, latency, cost
 
+**Accepted wording**:
+A fixed spelling that stands for one required fact of an Evaluation case.
+_Avoid_: paraphrase, translation
+
+**Scripted judge**:
+A judge of an Evaluation case that does not call a model. A required fact is present when the Outbound email body contains one accepted wording of that fact.
+_Avoid_: model judge, exact match
+
+**Model judge**:
+A judge of an Evaluation case that reads the Outbound email body. Another wording or a translation of a required fact still counts.
+_Avoid_: scripted judge
+
 **Experiment**:
 A run of Evaluation cases. Turn accuracy decides the pass. The turn's latency and cost are kept with the run and do not decide the pass.
 _Avoid_: Session, live inbox
