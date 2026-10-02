@@ -11,7 +11,7 @@
 
 Um assistente de e-mail em **LangGraph**: lê a caixa de entrada, prepara o texto e só envia depois da confirmação. **FastAPI** (`api/`), interface de chat em **Next.js** (`web/`) e **PostgreSQL**, orquestrados com **Docker Compose** e publicados na **DigitalOcean App Platform**.
 
-[Visão geral](#visão-geral) • [Recursos](#recursos) • [Arquitetura](#arquitetura) • [Passeio](#passeio) • [Como rodar](#como-rodar) • [API](#api) • [Deploy](#deploy) • [Estrutura do projeto](#estrutura-do-projeto) • [Problemas comuns](#problemas-comuns)
+[Visão geral](#visão-geral) • [Recursos](#recursos) • [Arquitetura](#arquitetura) • [Passeio](#passeio) • [Como rodar](#como-rodar) • [Avaliação](#avaliação) • [API](#api) • [Deploy](#deploy) • [Estrutura do projeto](#estrutura-do-projeto) • [Problemas comuns](#problemas-comuns)
 
 ![Tela inicial com a caixa de entrada no centro e os prompts de exemplo na lateral](./images/interface-inicial.png)
 
@@ -188,6 +188,29 @@ npm install
 BACKEND_URL=http://localhost:8080 npm run dev
 ```
 
+## Avaliação
+
+Um **experimento** pontua cinco **casos de avaliação** guardados no git: `pin-wins`, `ambiguous-reply`, `revision`, `identified-reply` e `research`. Não é uma sessão e não lê a caixa de entrada ao vivo. A API em execução não envia nada ao LangSmith.
+
+Na raiz do repositório:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-evaluation.ps1
+```
+
+O script carrega o `.env` da raiz e para no primeiro erro. Ele roda três passos:
+
+1. `python -m pytest` em `api/`.
+2. `python experiment.py --scripted-judge`: o turno real de chat e o **juiz scriptado**. Um fato exigido conta quando o corpo do e-mail de saída contém uma redação aceita. Este passo não chama o LangSmith nem o modelo juiz.
+3. `python experiment.py`: o mesmo turno, o **juiz de modelo** (`gpt-4o-mini`) e um experimento no LangSmith.
+
+![Avaliação aprovada: pytest, os dois juízes e evaluation passed](./images/evaluation-testes.png)
+
+Cada caso imprime uma linha: o id do caso, a **precisão do turno** (`1` ou `0`), os checks que falharam (`-` quando nenhum), a latência do turno em segundos e um custo estimado em USD. A **precisão do turno** decide o passe. Latência e custo ficam na linha e não decidem o passe. Um custo `0` significa que o turno não trouxe uso de tokens reconhecido. Não é o custo do juiz.
+
+> [!NOTE]
+> O script exige `OPENAI_API_KEY` e `LANGSMITH_API_KEY` no `.env` da raiz. O app no ar continua sem enviar nada ao LangSmith.
+
 ## API
 
 | Método | Endpoint | Descrição |
@@ -237,10 +260,12 @@ O aplicativo está publicado na **DigitalOcean App Platform** como um Web App co
 .
 ├── compose.yaml              # api, interface e Postgres
 ├── .env.example              # Modelo de variáveis
-├── images/                   # Capturas da interface e do deploy
+├── scripts/run-evaluation.ps1 # pytest, juiz scriptado e juiz de modelo
+├── images/                   # Capturas da interface, do deploy e da avaliação
 ├── web/                      # Interface de chat em Next.js
 └── api/
     ├── Dockerfile
+    ├── experiment.py         # Comando local do experimento
     ├── requirements.txt
     └── src/
         ├── main.py           # Entrada do FastAPI

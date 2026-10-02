@@ -11,7 +11,7 @@
 
 A **LangGraph** email assistant: it reads the inbox, drafts mail, and sends only after you confirm. **FastAPI** (`api/`), a **Next.js** chat UI (`web/`), and **PostgreSQL**, orchestrated with **Docker Compose** and deployed on **DigitalOcean App Platform**.
 
-[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Walkthrough](#walkthrough) • [Getting started](#getting-started) • [API](#api) • [Deploy](#deploy) • [Project structure](#project-structure) • [Troubleshooting](#troubleshooting)
+[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Walkthrough](#walkthrough) • [Getting started](#getting-started) • [Evaluation](#evaluation) • [API](#api) • [Deploy](#deploy) • [Project structure](#project-structure) • [Troubleshooting](#troubleshooting)
 
 ![Home screen with the inbox in the center and example prompts in the sidebar](./images/interface-inicial-en.png)
 
@@ -200,6 +200,29 @@ git config core.hooksPath scripts/hooks
 
 Git then uses the tracked `scripts/hooks/pre-commit`, which calls `scripts/check.sh`. Install the API and web dependencies first. The script does not install them.
 
+## Evaluation
+
+An **Experiment** scores five **Evaluation cases** kept in git: `pin-wins`, `ambiguous-reply`, `revision`, `identified-reply`, and `research`. It is not a Session and it does not read the live inbox. The running API sends nothing to LangSmith.
+
+From the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-evaluation.ps1
+```
+
+The script loads the repo-root `.env` and stops at the first failure. It runs three steps:
+
+1. `python -m pytest` in `api/`.
+2. `python experiment.py --scripted-judge`: the real chat turn and the **Scripted judge**. A required fact counts when the Outbound email body contains one accepted wording. This step does not call LangSmith or the judge model.
+3. `python experiment.py`: the same turn, the **Model judge** (`gpt-4o-mini`), and one LangSmith Experiment.
+
+![Passing evaluation: pytest, both judges, and evaluation passed](./images/evaluation-testes.png)
+
+Each case prints one line: the case id, **Turn accuracy** (`1` or `0`), the failed checks (`-` when none), the turn's latency in seconds, and an estimated cost in USD. **Turn accuracy** is the pass. Latency and cost stay on the line and do not decide it. A cost of `0` means the turn did not report recognized token usage. It is not the judge's cost.
+
+> [!NOTE]
+> The script requires `OPENAI_API_KEY` and `LANGSMITH_API_KEY` in the repo-root `.env`. The running app still sends nothing to LangSmith.
+
 ## API
 
 | Method | Endpoint | Description |
@@ -249,10 +272,12 @@ The app is deployed on **DigitalOcean App Platform** as one Web App with three c
 .
 ├── compose.yaml              # api, web, and Postgres
 ├── .env.example              # Environment template
-├── images/                   # UI and deploy screenshots
+├── scripts/run-evaluation.ps1 # pytest, scripted judge, then model judge
+├── images/                   # UI, deploy, and evaluation screenshots
 ├── web/                      # Next.js chat UI
 └── api/
     ├── Dockerfile
+    ├── experiment.py         # Local Experiment command
     ├── requirements.txt
     └── src/
         ├── main.py           # FastAPI entrypoint
