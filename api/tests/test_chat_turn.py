@@ -709,6 +709,205 @@ def test_an_ambiguous_reply_still_stores_the_clear_new_draft(monkeypatch):
     assert "João Mendes, Fatura de abril, 2 de outubro de 2026" in result.assistant_reply
     assert "João Mendes, Fatura de março, 1 de outubro de 2026" in result.assistant_reply
     assert "pronto" not in result.assistant_reply.casefold()
+    assert result.revision is None
+
+
+def _two_joao_emails():
+    return (
+        InboundEmail(
+            id="joao-abril",
+            sender="João Mendes",
+            address="joao@example.com",
+            subject="Fatura de abril",
+            date="2 de outubro de 2026",
+            body="Segue a fatura de abril.",
+        ),
+        InboundEmail(
+            id="joao-marco",
+            sender="João Mendes",
+            address="joao@example.com",
+            subject="Fatura de março",
+            date="1 de outubro de 2026",
+            body="Segue a fatura de março.",
+        ),
+    )
+
+
+def test_an_ambiguous_reply_beside_a_missed_revision_keeps_the_cards(monkeypatch):
+    monkeypatch.setattr("api.drafts.confirm_draft", _closed_confirm)
+    monkeypatch.setattr("api.myemailer.sender.send_mail", _closed_confirm)
+    body = "Olá,\n\nTexto.\n\nAté mais!"
+    first_id = "00000000-0000-4000-8000-000000000061"
+    second_id = "00000000-0000-4000-8000-000000000062"
+    session = _session()
+    session.add(
+        Draft(
+            id=uuid.UUID(first_id),
+            subject="Original",
+            body=body,
+            recipient="ana@example.com",
+            state=DRAFT_OPEN,
+        )
+    )
+    session.add(
+        Draft(
+            id=uuid.UUID(second_id),
+            subject="Outro",
+            body=body,
+            recipient="bia@example.com",
+            state=DRAFT_OPEN,
+        )
+    )
+    session.commit()
+    from api.evaluation import OpenDraft
+
+    def invoke(_data, config=None):
+        send_me_email.invoke(
+            {
+                "subject": "Sexta",
+                "content": "Olá,\n\nA reunião passou para sexta.\n\nAté mais!",
+                "to_email": "ana@example.com",
+            },
+            config=config,
+        )
+        return _messages(_reply("O rascunho está pronto para ana@example.com."))
+
+    result = chat_turn(
+        _context(
+            chat_message=(
+                "Responde o email do João e manda outro para ana@example.com, "
+                "e muda o assunto para Reunião."
+            ),
+            pinned_recipient=None,
+            inbound_emails=_two_joao_emails(),
+            open_drafts=(
+                OpenDraft(
+                    id=first_id,
+                    recipient="ana@example.com",
+                    subject="Original",
+                    body=body,
+                ),
+                OpenDraft(
+                    id=second_id,
+                    recipient="bia@example.com",
+                    subject="Outro",
+                    body=body,
+                ),
+            ),
+            session=session,
+        ),
+        supervisor_factory=lambda: _Supervisor(invoke),
+    )
+
+    assert result.outcome == "question"
+    assert result.revision == "failed"
+    assert result.assistant_reply.startswith("Qual email?")
+    assert "pronto" not in result.assistant_reply.casefold()
+    assert [draft.subject for draft in result.drafts] == ["Sexta"]
+    assert result.drafts[0].recipient == "ana@example.com"
+    assert [item.subject for item in list_open_drafts(session)] == [
+        "Original",
+        "Outro",
+        "Sexta",
+    ]
+
+
+def test_an_ambiguous_reply_still_updates_the_one_open_draft(monkeypatch):
+    monkeypatch.setattr("api.drafts.confirm_draft", _closed_confirm)
+    monkeypatch.setattr("api.myemailer.sender.send_mail", _closed_confirm)
+    called = []
+    draft_id = "00000000-0000-4000-8000-000000000063"
+    body = "Olá,\n\nTexto.\n\nAté mais!"
+    session = _session()
+    session.add(
+        Draft(
+            id=uuid.UUID(draft_id),
+            subject="Original",
+            body=body,
+            recipient="ana@example.com",
+            state=DRAFT_OPEN,
+        )
+    )
+    session.commit()
+    from api.evaluation import OpenDraft
+
+    def invoke(_data, _config=None):
+        called.append(True)
+        return _messages(_reply("Qual email?"))
+
+    result = chat_turn(
+        _context(
+            chat_message=(
+                "Responde o email do João e muda o assunto para Reunião."
+            ),
+            pinned_recipient=None,
+            inbound_emails=_two_joao_emails(),
+            open_drafts=(
+                OpenDraft(
+                    id=draft_id,
+                    recipient="ana@example.com",
+                    subject="Original",
+                    body=body,
+                ),
+            ),
+            session=session,
+        ),
+        supervisor_factory=lambda: _Supervisor(invoke),
+    )
+
+    assert called == []
+    assert result.outcome == "question"
+    assert result.revision is None
+    assert result.assistant_reply.startswith("Qual email?")
+    assert result.drafts[0].id == draft_id
+    assert result.drafts[0].subject == "Reunião"
+    assert result.drafts[0].body == body
+    assert list_open_drafts(session)[0].subject == "Reunião"
+
+
+def test_a_closing_change_is_not_a_failed_creation(monkeypatch):
+    monkeypatch.setattr("api.drafts.confirm_draft", _closed_confirm)
+    monkeypatch.setattr("api.myemailer.sender.send_mail", _closed_confirm)
+    draft_id = "00000000-0000-4000-8000-000000000064"
+    body = "Olá,\n\nTexto.\n\nAté mais!"
+    session = _session()
+    session.add(
+        Draft(
+            id=uuid.UUID(draft_id),
+            subject="Original",
+            body=body,
+            recipient="ana@example.com",
+            state=DRAFT_OPEN,
+        )
+    )
+    session.commit()
+    from api.evaluation import OpenDraft
+
+    def invoke(_data, _config=None):
+        return _messages(_reply("O rascunho está pronto para ana@example.com."))
+
+    result = chat_turn(
+        _context(
+            chat_message="Envia esse email com outro fechamento.",
+            pinned_recipient=None,
+            open_drafts=(
+                OpenDraft(
+                    id=draft_id,
+                    recipient="ana@example.com",
+                    subject="Original",
+                    body=body,
+                ),
+            ),
+            session=session,
+        ),
+        supervisor_factory=lambda: _Supervisor(invoke),
+    )
+
+    assert result.outcome is None
+    assert result.drafts == ()
+    assert result.assistant_reply == "O rascunho está pronto para ana@example.com."
+    assert list_open_drafts(session)[0].subject == "Original"
+    assert list_open_drafts(session)[0].body == body
 
 
 def test_a_question_beside_a_missed_revision_keeps_the_card(monkeypatch):
@@ -1188,10 +1387,10 @@ def test_a_revision_with_no_open_draft_is_not_a_failed_creation(monkeypatch):
 
     assert called == []
     assert portuguese.drafts == ()
-    assert portuguese.outcome is None
+    assert portuguese.outcome == "question"
     assert portuguese.assistant_reply == "Não há rascunho para atualizar."
     assert english.drafts == ()
-    assert english.outcome is None
+    assert english.outcome == "question"
     assert english.assistant_reply == "There is nothing to revise."
 
 
@@ -1248,7 +1447,7 @@ def test_two_open_drafts_ask_which_and_change_neither(monkeypatch):
 
     assert called == []
     assert result.drafts == ()
-    assert result.outcome is None
+    assert result.outcome == "question"
     assert result.assistant_reply == (
         "Qual rascunho? Original para ana@example.com, ou Outro para bia@example.com."
     )

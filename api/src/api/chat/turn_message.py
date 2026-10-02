@@ -160,9 +160,17 @@ def asks_for_both(message: str) -> bool:
     """A new Outbound email and a Revision in the same Chat message."""
     if is_revision_request(message) or not asks_for_new_outbound(message):
         return False
-    return requested_subject(message) is not None and _SUBJECT_CHANGE.search(
-        message or ""
-    ) is not None
+    return subject_to_apply(message) is not None
+
+
+def subject_to_apply(message: str) -> str | None:
+    """The subject a question should write when one open Draft is the target."""
+    subject = requested_subject(message)
+    if subject is None:
+        return None
+    if is_revision_request(message) or _SUBJECT_CHANGE.search(message or ""):
+        return subject
+    return None
 
 
 def asks_for_new_outbound(message: str) -> bool:

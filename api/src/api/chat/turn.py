@@ -56,8 +56,10 @@ def run_shared_turn(
     from api.ai.tools import CaseTools, use_case_tools
     from api.ai.turn_usage import collecting_research_drafts
     from api.chat.turn_message import (
+        asks_for_both,
         asks_for_new_outbound,
         disambiguation_reply,
+        is_revision_request,
         recipient_question,
         reply_names_recipient,
         with_open_drafts,
@@ -67,7 +69,13 @@ def run_shared_turn(
     inbound_question = disambiguation_reply(chat_message, inbound_emails)
     clear_send = inbound_question is not None and _clear_new_send(chat_message)
     if inbound_question is not None and not clear_send:
-        return SharedTurn(inbound_question, (), {}, (), 0.0)
+        return _question_turn(
+            inbound_question,
+            chat_message,
+            open_drafts,
+            session=session,
+            sender_name=sender_name,
+        )
     question = None if clear_send else inbound_question
     if question is None and not clear_send:
         question = recipient_question(
@@ -137,6 +145,11 @@ def run_shared_turn(
     reply = extract_assistant_reply(list(messages))
     if clear_send and inbound_question is not None:
         kept = _without_replies(drafts, reply_targets, session)
+        revision = None
+        if asks_for_both(chat_message):
+            seeded = {str(item.id) for item in open_drafts}
+            if not any(str(draft.id) in seeded for draft in kept):
+                revision = "failed"
         return SharedTurn(
             inbound_question,
             tuple(kept),
@@ -144,6 +157,7 @@ def run_shared_turn(
             tuple(messages),
             latency,
             outcome="question",
+            revision=revision,
         )
     finished = _finish_combined(
         chat_message,
@@ -159,7 +173,11 @@ def run_shared_turn(
     if len(drafts) == 1:
         reply = reply_names_recipient(reply, drafts[0].recipient, chat_message)
     outcome = None
-    if asks_for_new_outbound(chat_message) and not drafts:
+    if (
+        asks_for_new_outbound(chat_message)
+        and not drafts
+        and not is_revision_request(chat_message)
+    ):
         outcome = "creation failed"
     return SharedTurn(
         assistant_reply=reply,
@@ -201,21 +219,22 @@ def _question_turn(
     session: Session,
     sender_name: str | None,
 ) -> SharedTurn:
-    """A Recipient question stays, and a Revision with one target still lands."""
-    from api.chat.turn_message import asks_for_both
+    """A question stays, and a Revision with one target still lands."""
+    from api.chat.turn_message import subject_to_apply
     from api.drafts import revise_open_draft
 
     shown: tuple[Any, ...] = ()
     revision = None
     outcome = None
-    if asks_for_both(chat_message):
+    subject = subject_to_apply(chat_message)
+    if subject is not None:
         outcome = "question"
         if len(open_drafts) == 1:
             current = open_drafts[0]
             draft = revise_open_draft(
                 session,
                 uuid.UUID(str(current.id)),
-                subject=requested_subject_for(chat_message),
+                subject=subject,
                 body=current.body,
                 sender_name=sender_name,
             )
@@ -225,15 +244,6 @@ def _question_turn(
     return SharedTurn(
         question, shown, {}, (), 0.0, outcome=outcome, revision=revision
     )
-
-
-def requested_subject_for(chat_message: str) -> str:
-    from api.chat.turn_message import requested_subject
-
-    subject = requested_subject(chat_message)
-    if subject is None:
-        raise ValueError("Revision has no subject")
-    return subject
 
 
 def _apply_subject_revision(
@@ -340,9 +350,11 @@ def _revision_turn(
             if english
             else "Não há rascunho para atualizar."
         )
-        return SharedTurn(reply, (), {}, (), 0.0)
+        return SharedTurn(reply, (), {}, (), 0.0, outcome="question")
     if len(open_drafts) > 1:
-        return SharedTurn(_which_draft(open_drafts, english), (), {}, (), 0.0)
+        return SharedTurn(
+            _which_draft(open_drafts, english), (), {}, (), 0.0, outcome="question"
+        )
     subject = requested_subject(chat_message)
     if subject is None:
         return None
