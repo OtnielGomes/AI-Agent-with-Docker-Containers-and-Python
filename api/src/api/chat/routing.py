@@ -10,7 +10,11 @@ from .models import (
     ChatMessage,
     ChatMessage_listItem,
 )
-from .turn_message import with_open_drafts
+from .turn_message import (
+    disambiguation_reply,
+    reply_names_recipient,
+    with_open_drafts,
+)
 from api.db import get_session
 from api.ai.agents import get_supervisor
 from api.ai.messages import extract_assistant_reply
@@ -75,13 +79,20 @@ def chat_create_message(
     session.add(obj)
     session.commit()
 
+    question = disambiguation_reply(payload.message, payload.inbound_emails)
+    if question is not None:
+        return chat_turn_payload(question, [])
+
     supe = get_supervisor()
     msg_data = {
         "messages": [
             {
                 "role": "user",
                 "content": with_open_drafts(
-                    payload.message, payload.open_drafts, payload.inbound_emails
+                    payload.message,
+                    payload.open_drafts,
+                    payload.inbound_emails,
+                    pin,
                 ),
             },
         ]
@@ -100,6 +111,7 @@ def chat_create_message(
     if not messages:
         raise HTTPException(status_code=400, detail="Failed to get supervisor response")
     
-    return chat_turn_payload(
-        extract_assistant_reply(messages), drafts, reply_targets
-    )
+    reply = extract_assistant_reply(messages)
+    if len(drafts) == 1:
+        reply = reply_names_recipient(reply, drafts[0].recipient, payload.message)
+    return chat_turn_payload(reply, drafts, reply_targets)

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import BaseModel
+from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from api.drafts import DRAFT_OPEN, Draft, discard_open_drafts
@@ -517,8 +518,22 @@ def _invoke_chat_turn(
 ) -> TurnResult:
     from api.ai.tools import CaseTools, use_case_tools
     from api.ai.turn_usage import collecting_turn_usage
-    from api.chat.turn_message import with_open_drafts
+    from api.chat.turn_message import (
+        disambiguation_reply,
+        reply_names_recipient,
+        with_open_drafts,
+    )
     from api.drafts import collecting_created_drafts
+
+    question = disambiguation_reply(context.chat_message, context.inbound_emails)
+    if question is not None:
+        return TurnResult(
+            assistant_reply=question,
+            drafts=(),
+            research_called=False,
+            latency=0.0,
+            cost=0.0,
+        )
 
     factory = _default_supervisor if supervisor_factory is None else supervisor_factory
     binding = CaseTools(
@@ -533,6 +548,7 @@ def _invoke_chat_turn(
             context.chat_message,
             context.open_drafts,
             context.inbound_emails,
+            context.pinned_recipient,
         )
         config: dict[str, Any] = {}
         if context.pinned_recipient:
@@ -551,9 +567,13 @@ def _invoke_chat_turn(
     messages = result["messages"]
     from api.ai.messages import extract_assistant_reply
 
+    drafts = _observed_drafts(context.open_drafts, created)
+    reply = extract_assistant_reply(list(messages))
+    if len(drafts) == 1:
+        reply = reply_names_recipient(reply, drafts[0].recipient, context.chat_message)
     return TurnResult(
-        assistant_reply=extract_assistant_reply(list(messages)),
-        drafts=_observed_drafts(context.open_drafts, created),
+        assistant_reply=reply,
+        drafts=drafts,
         research_called=bool(research_calls) or _research_called(messages),
         latency=latency,
         cost=_messages_cost(messages) + _messages_cost(extra_usage),
@@ -824,6 +844,7 @@ def _run_case(case: _Case, turn: Turn, judge: Judge) -> CaseTrace:
         score = _score_case(case, result, judge)
         return _trace(case, result.assistant_reply, result.drafts, score)
     finally:
+        session.rollback()
         discard_open_drafts(session)
 
 
@@ -846,7 +867,12 @@ def _trace(
 
 
 def _case_session() -> Session:
-    engine = create_engine("sqlite://")
+    """One in-memory store, shared by the thread that runs the Draft tools."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     SQLModel.metadata.create_all(engine, tables=[Draft.__table__])
     return Session(engine)
 
@@ -1020,14 +1046,16 @@ def publish_experiment(experiment: ExperimentResult, client: Any) -> str:
     dataset = _upsert_dataset(client)
     example_ids = _upsert_examples(client, dataset.id, experiment.traces)
     project_name = _experiment_name()
-    client.create_project(
+    project = client.create_project(
         project_name=project_name,
         reference_dataset_id=dataset.id,
         description="Synthetic Evaluation cases",
         metadata={"langsmith_project": _langsmith_project()},
     )
     for trace in experiment.traces:
-        _publish_trace(client, project_name, example_ids[trace.case_id], trace)
+        _publish_trace(
+            client, project_name, example_ids[trace.case_id], trace, project.id
+        )
     return project_name
 
 
@@ -1055,7 +1083,7 @@ def _run_traced_experiment(client: Any, judge: Judge) -> int:
     dataset = _upsert_dataset(client)
     example_ids = _upsert_examples(client, dataset.id, _CANONICAL_CASES)
     project_name = _experiment_name()
-    client.create_project(
+    project = client.create_project(
         project_name=project_name,
         reference_dataset_id=dataset.id,
         description="Synthetic Evaluation cases",
@@ -1077,10 +1105,12 @@ def _run_traced_experiment(client: Any, judge: Judge) -> int:
     for trace in experiment.traces:
         run_id = publishing.run_ids.get(trace.case_id)
         if run_id is None:
-            _publish_trace(client, project_name, example_ids[trace.case_id], trace)
+            _publish_trace(
+                client, project_name, example_ids[trace.case_id], trace, project.id
+            )
             continue
         client.update_run(run_id, outputs=_trace_outputs(trace))
-        _feedback(client, run_id, trace.score)
+        _feedback(client, run_id, trace.score, project.id)
     return 1 if experiment.failed else 0
 
 
@@ -1130,7 +1160,13 @@ def _upsert_examples(client: Any, dataset_id: Any, cases: Sequence[Any]) -> dict
     return ids
 
 
-def _publish_trace(client: Any, project_name: str, example_id: Any, trace: CaseTrace) -> None:
+def _publish_trace(
+    client: Any,
+    project_name: str,
+    example_id: Any,
+    trace: CaseTrace,
+    experiment_id: Any,
+) -> None:
     run_id = uuid.uuid4()
     started = datetime.now(timezone.utc)
     ended = started + timedelta(seconds=trace.score.latency)
@@ -1145,18 +1181,23 @@ def _publish_trace(client: Any, project_name: str, example_id: Any, trace: CaseT
         start_time=started,
         end_time=ended,
     )
-    _feedback(client, run_id, trace.score)
+    _feedback(client, run_id, trace.score, experiment_id)
 
 
-def _feedback(client: Any, run_id: Any, score: CaseScore) -> None:
-    client.create_feedback(run_id, "turn_accuracy", score=score.turn_accuracy)
-    client.create_feedback(run_id, "latency", score=score.latency)
-    client.create_feedback(run_id, "cost", score=score.cost)
+def _feedback(client: Any, run_id: Any, score: CaseScore, experiment_id: Any) -> None:
+    client.create_feedback(
+        run_id, "turn_accuracy", score=score.turn_accuracy, session_id=experiment_id
+    )
+    client.create_feedback(
+        run_id, "latency", score=score.latency, session_id=experiment_id
+    )
+    client.create_feedback(run_id, "cost", score=score.cost, session_id=experiment_id)
     client.create_feedback(
         run_id,
         "failed_checks",
         score=0 if score.failed_checks else 1,
         comment=",".join(score.failed_checks),
+        session_id=experiment_id,
     )
 
 

@@ -1,5 +1,6 @@
 """Score Evaluation cases through the Experiment, with a scripted turn and judge."""
 
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -7,7 +8,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlmodel import Session, create_engine
 
-from api.drafts import create_open_draft, list_open_drafts
+from api.drafts import DRAFT_OPEN, Draft, create_open_draft, list_open_drafts
 from api.evaluation import (
     JudgeRequest,
     JudgeVerdict,
@@ -243,6 +244,67 @@ def test_draft_opened_in_the_case_store_is_gone_when_the_case_ends():
     run_experiment(turn, _judge_pass, case_ids=("pin-wins",))
 
     assert list_open_drafts(held["session"]) == []
+
+
+def test_a_draft_saved_on_another_thread_stays_in_the_case_store():
+    seen = {}
+
+    def turn(context):
+        box = {}
+
+        def save():
+            try:
+                create_open_draft(
+                    context.session,
+                    subject="Nota",
+                    body="Olá,\n\nSegue.\n\nAté mais!\nAlex",
+                    pinned=context.pinned_recipient,
+                    named=None,
+                    default=context.default_inbox,
+                    sender_name=context.sender_name,
+                )
+            except Exception as exc:
+                box["error"] = exc
+
+        worker = threading.Thread(target=save)
+        worker.start()
+        worker.join()
+        if "error" in box:
+            raise box["error"]
+        seen["open"] = [draft.recipient for draft in list_open_drafts(context.session)]
+        seen["session"] = context.session
+        return scripted_turn(context)
+
+    run_experiment(turn, _judge_pass, case_ids=("pin-wins",))
+
+    assert seen["open"] == ["ana@example.com"]
+    assert list_open_drafts(seen["session"]) == []
+
+
+def test_a_failed_flush_still_scores_the_turn_and_runs_the_next_case():
+    def turn(context):
+        if context.case_id == "pin-wins":
+            context.session.connection().exec_driver_sql(
+                "CREATE TRIGGER abort_draft BEFORE INSERT ON draft "
+                "BEGIN SELECT RAISE(ABORT, 'flush failed'); END"
+            )
+            context.session.add(
+                Draft(
+                    subject="Nota",
+                    body="Olá,",
+                    recipient="ana@example.com",
+                    state=DRAFT_OPEN,
+                )
+            )
+            context.session.commit()
+        return scripted_turn(context)
+
+    experiment = run_experiment(
+        turn, _judge_pass, case_ids=("pin-wins", "ambiguous-reply")
+    )
+
+    assert experiment.cases[0].failed_checks == ("turn",)
+    assert experiment.cases[1].turn_accuracy == 1
 
 
 def test_case_store_is_not_the_application_database():

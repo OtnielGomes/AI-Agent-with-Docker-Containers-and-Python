@@ -141,11 +141,12 @@ def test_publish_upserts_the_five_cases_and_opens_a_new_experiment(monkeypatch):
     assert "private-inbox@gmail.com" not in blob
     assert "Judge one email assistant turn" not in blob
     accuracy = [
-        item["score"]
+        item
         for item in client.feedback
         if item["key"] == "turn_accuracy" and item["run_id"] == pin["id"]
     ]
-    assert accuracy == [1]
+    assert [item["score"] for item in accuracy] == [1]
+    assert accuracy[0]["session_id"] == client.projects[0].id
 
 
 def test_a_failed_case_is_still_published(monkeypatch):
@@ -305,7 +306,8 @@ def test_the_chat_turn_is_traced_outside_the_judge(monkeypatch, capsys):
     assert pin.run.outputs["latency"] >= 0
     assert client.runs == []
     assert client.updated_runs[0]["outputs"]["turn_accuracy"] == 0
-    assert any(item["key"] == "turn_accuracy" for item in client.feedback)
+    accuracy = next(item for item in client.feedback if item["key"] == "turn_accuracy")
+    assert accuracy["session_id"] == client.projects[0].id
     assert "Judge one email assistant turn" not in json.dumps(
         pin.kwargs["inputs"], default=str
     )

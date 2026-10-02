@@ -170,7 +170,92 @@ def test_draft_without_a_pin_uses_the_synthetic_inbox_and_strips_alex(monkeypatc
     assert os.environ["EMAIL_SENDER_NAME"] == "Otniel"
 
 
+def test_ambiguous_reply_asks_which_email_without_calling_the_supervisor(monkeypatch):
+    def invoke(_data, _config=None):
+        raise AssertionError("supervisor ran")
+
+    held = _run("ambiguous-reply", invoke, monkeypatch)
+    reply = held["trace"].assistant_reply.casefold()
+
+    assert held["score"].turn_accuracy == 1
+    assert held["score"].failed_checks == ()
+    assert held["trace"].drafts == ()
+    for term in (
+        "João Mendes",
+        "Fatura de março",
+        "Fatura de abril",
+        "1 de outubro de 2026",
+        "2 de outubro de 2026",
+    ):
+        assert term in held["trace"].assistant_reply
+    assert "pronto" not in reply
+    assert "pronta" not in reply
+
+
+def test_a_person_name_in_the_reply_still_names_the_recipient_address(monkeypatch):
+    def invoke(_data, config=None):
+        send_me_email.invoke(
+            {
+                "subject": "Reunião",
+                "content": "Olá, João,\n\nA reunião passou para sexta.\n\nAté mais!",
+            },
+            config=config,
+        )
+        return _messages(_reply("O rascunho está pronto para João."))
+
+    held = _run("pin-wins", invoke, monkeypatch)
+
+    assert "ana@example.com" in held["trace"].assistant_reply
+    assert held["score"].turn_accuracy == 1
+    assert held["score"].failed_checks == ()
+
+
+def test_pinned_recipient_is_stated_for_a_new_email(monkeypatch):
+    def invoke(data, config=None):
+        text = data["messages"][0]["content"]
+        assert "ana@example.com" in text
+        assert "Pinned recipient" in text
+        send_me_email.invoke(
+            {
+                "subject": "Latte",
+                "content": (
+                    "Olá,\n\n"
+                    "Passos de um latte: aqueça o leite e extraia o espresso.\n\n"
+                    "Até mais!"
+                ),
+            },
+            config=config,
+        )
+        return _messages(
+            _reply("", tool_calls=[{"name": "research_email", "args": {}, "id": "1"}]),
+            _reply(_READY),
+        )
+
+    held = _run("research", invoke, monkeypatch)
+
+    assert held["score"].turn_accuracy == 1
+    assert held["score"].failed_checks == ()
+
+
 def test_ambiguous_reply_reads_the_case_inbox_newest_first(monkeypatch):
+    emails = (
+        InboundEmail(
+            id="joao-abril",
+            sender="João Mendes",
+            address="joao@example.com",
+            subject="Fatura de abril",
+            date="2 de outubro de 2026",
+            body="Segue a fatura de abril.",
+        ),
+        InboundEmail(
+            id="joao-marco",
+            sender="João Mendes",
+            address="joao@example.com",
+            subject="Fatura de março",
+            date="1 de outubro de 2026",
+            body="Segue a fatura de março.",
+        ),
+    )
     seen = {}
 
     def invoke(data, _config=None):
@@ -178,13 +263,18 @@ def test_ambiguous_reply_reads_the_case_inbox_newest_first(monkeypatch):
         assert text.index("Fatura de abril") < text.index("Fatura de março")
         seen["recent"] = get_recent_emails.invoke({"limit": 10, "hours_ago": 1})
         seen["unread"] = get_unread_emails.invoke({"hours_ago": 1})
-        return _messages(_reply(_AMBIGUOUS))
+        return _messages(_reply("Segue a lista."))
 
-    held = _run("ambiguous-reply", invoke, monkeypatch)
+    chat_turn(
+        _context(
+            case_id="list-inbox",
+            chat_message="Lista a caixa.",
+            pinned_recipient=None,
+            inbound_emails=emails,
+        ),
+        supervisor_factory=lambda: _Supervisor(invoke),
+    )
 
-    assert held["score"].turn_accuracy == 1
-    assert held["score"].failed_checks == ()
-    assert held["trace"].drafts == ()
     assert seen["recent"].index("Fatura de abril") < seen["recent"].index("Fatura de março")
     assert seen["unread"].index("joao-abril") < seen["unread"].index("joao-marco")
     assert "marina@example.com" not in seen["recent"]
@@ -260,6 +350,7 @@ def test_revision_updates_the_seeded_draft(monkeypatch):
 def test_identified_reply_ignores_the_pin(monkeypatch):
     def invoke(data, config=None):
         assert config["configurable"]["to_email"] == "ana@example.com"
+        assert "Pinned recipient" not in data["messages"][0]["content"]
         send_me_email.invoke(
             {
                 "subject": "Re: Contrato",
@@ -331,6 +422,52 @@ def test_research_tool_model_call_counts_in_the_turn_cost(monkeypatch):
     assert held["score"].turn_accuracy == 1
     assert held["score"].failed_checks == ()
     assert held["score"].cost == pytest.approx(0.25)
+
+
+def test_research_without_a_draft_fails_draft_outcome(monkeypatch):
+    def invoke(_data, _config=None):
+        return _messages(
+            _reply(
+                "",
+                tool_calls=[{"name": "research_email", "args": {}, "id": "1"}],
+            ),
+            _reply("Preciso de um destinatário."),
+        )
+
+    held = _run("research", invoke, monkeypatch)
+
+    assert held["trace"].drafts == ()
+    assert held["score"].turn_accuracy == 0
+    assert held["score"].failed_checks[0] == "draft-outcome"
+
+
+def test_an_english_ready_line_is_restated_for_a_portuguese_message(monkeypatch):
+    def invoke(_data, config=None):
+        send_me_email.invoke(
+            {
+                "subject": "Latte",
+                "content": (
+                    "Olá,\n\n"
+                    "Passos de um latte: aqueça o leite e extraia o espresso.\n\n"
+                    "Até mais!"
+                ),
+            },
+            config=config,
+        )
+        return _messages(
+            _reply(
+                "",
+                tool_calls=[{"name": "research_email", "args": {}, "id": "1"}],
+            ),
+            _reply("A draft is ready and addressed to ana@example.com."),
+        )
+
+    held = _run("research", invoke, monkeypatch)
+
+    assert "pronto" in held["trace"].assistant_reply.casefold()
+    assert held["trace"].drafts[0].body.count("Até mais!") == 1
+    assert held["score"].turn_accuracy == 1
+    assert held["score"].failed_checks == ()
 
 
 def test_research_case_records_the_tool_and_the_draft(monkeypatch):
