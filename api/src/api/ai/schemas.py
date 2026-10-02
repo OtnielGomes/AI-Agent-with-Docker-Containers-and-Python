@@ -22,3 +22,5 @@ class DraftSchema(BaseModel):
 class SupervisorMessageSchema(BaseModel):
     content: str
     drafts: list[DraftSchema] = Field(default_factory=list)
+    outcome: str | None = None
+    revision: str | None = None

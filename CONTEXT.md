@@ -5,11 +5,11 @@ A chat assistant that researches content, reads the inbox, and sends outbound em
 ## Language
 
 **Chat message**:
-A user or assistant utterance in the conversation that drives research, inbox reading, or sending.
+A user or assistant utterance in the conversation that drives research, inbox reading, or sending. It asks for a new Outbound email when it says manda, mandar, enviar, envie, envia, or send. The word email alone does not: "Lista meus emails" is inbox reading, and "Email the notes to ana@example.com" does not ask for a new Outbound email. It asks for research and an Outbound email when it also says pesquisa, pesquisar, pesquise, or research. "Pesquisa meus emails" does not store a Draft. "Descobre os passos e me escreve" does not ask for either. An address alone does not ask for a new Outbound email, and research from an earlier Chat message is not kept for it.
 _Avoid_: request, prompt, contents
 
 **Assistant reply**:
-The assistant's Chat message. It is written in the language of the user's Chat message, and it carries no offer of further work.
+The assistant's Chat message. It is written in the language of the user's Chat message. It carries no offer of further work and does not claim an Outbound email was sent. It says the Draft is ready only when every Draft or Revision the Chat message asked for has happened. When both have happened, it says the new Draft is ready, names that Recipient, and says the other Draft was updated. When the Chat message asked for both, the reply does not enter the Session if either failed. When the reply asks which Recipient, which Inbound email, or for a valid Recipient, it still enters, and it does not say the Draft is ready. A Revision with a target, and a new Outbound email with one clear Recipient, still happen in that turn. An ambiguous Reply is not created. When there is nothing to revise, or it asks which open Draft, it enters the Session and does not say the Draft is ready. When it asks for a Recipient because there is no Pinned recipient, no Named recipient, and no Default inbox, or when it asks which Inbound email, it does not say the Draft is ready. When there is no Pinned recipient and the Chat message states two Named recipients, it asks which, naming both addresses, and does not say the Draft is ready. A Revision with a target still happens. Another Outbound email with one clear Recipient is still stored. When there is no Pinned recipient and the Chat message states an address that is not valid, it asks for a valid Recipient and does not say the Draft is ready. On a failed creation it does not enter the Session.
 _Avoid_: outbound email body, assistant offer
 
 **Recipient**:
@@ -17,12 +17,12 @@ The address that receives an outbound email. Precedence is pinned, then named, t
 _Avoid_: to_email, destination, target
 
 **Pinned recipient**:
-The Recipient chosen in the chat UI. It stays until the human changes it and applies to the next Chat message that creates a Draft, except a Reply. It does not change the Recipient of an open Draft.
+The Recipient chosen in the chat UI. It stays until the human changes it and applies to the next Chat message that creates a Draft, except a Reply. It does not change the Recipient of an open Draft. Two Named recipients, or an address that is not valid, do not replace it.
 _Avoid_: UI email, selected email, to_email
 
 **Named recipient**:
-A Recipient stated in the Chat message and passed into the send tool.
-_Avoid_: tool email, explicit to_email
+An email address stated in the Chat message. A person's name is not one. It is the Recipient when there is no Pinned recipient, including on the Draft stored from research when the send tool did not run.
+_Avoid_: tool email, explicit to_email, person's name
 
 **Default inbox**:
 The user's own inbox address, used when neither pinned nor named.
@@ -33,7 +33,7 @@ An email already in the user's inbox, apart from the Session. It is not an Outbo
 _Avoid_: message, recent chat, notification
 
 **Reply**:
-A Draft that answers one Inbound email. Its Recipient is that email's sender. Its subject starts with "Re:" plus that email's subject; an existing "Re:" is kept once, and an empty subject stays "Re:". The body answers that email and does not include the Inbound email's body or its attachments. An empty Inbound email body leaves the Reply to answer from the subject. The Pinned recipient does not apply. The human chooses the Inbound email with a separate action after reading it, or a Chat message that identifies it. That separate action waits while a Chat message is in flight. An Arrival notice opens the Reply when no Draft is open and no Chat message is in flight. If the Inbound email's language cannot be told and the Chat message does not ask for one, the Reply uses Portuguese. If the Chat message matches more than one Inbound email, the Assistant reply asks which, by sender, subject, and date, and no Reply is created.
+A Draft that answers one Inbound email. Its Recipient is that email's sender. Its subject starts with "Re:" plus that email's subject; an existing "Re:" is kept once, and an empty subject stays "Re:". The body answers that email and does not include the Inbound email's body or its attachments. An empty Inbound email body leaves the Reply to answer from the subject. The Pinned recipient does not apply. The human chooses the Inbound email with a separate action after reading it, or a Chat message that identifies it. That separate action waits while a Chat message is in flight. An Arrival notice opens the Reply when no Draft is open and no Chat message is in flight. If the Inbound email's language cannot be told and the Chat message does not ask for one, the Reply uses Portuguese. If the Chat message matches more than one Inbound email, the Assistant reply asks which, by sender, subject, and date, and no Reply is created. A new Outbound email in that same Chat message, with one clear Recipient, is still stored. A Revision with a target still happens.
 _Avoid_: Assistant reply, auto-send
 
 **Baseline**:
@@ -53,7 +53,7 @@ An email to a Recipient, with a subject and a body in the same language. Unsent,
 _Avoid_: message (that is a Chat message)
 
 **Draft**:
-An unsent Outbound email stored by the assistant for human review. The human may edit subject, Outbound email body, and Recipient before Confirm.
+An unsent Outbound email stored by the assistant for human review. The human may edit subject, Outbound email body, and Recipient before Confirm. A Chat message that asks for research and an Outbound email, when that research has a subject and a body, stores one Draft from them if the turn stored no other Draft. It does not store that Draft when the Assistant reply asks which of two Named recipients, or asks for a valid Recipient. That body becomes an Outbound email body. Its Recipient is the Pinned recipient, then a Named recipient, then the Default inbox. The Assistant reply is not a source for it.
 _Avoid_: Gmail draft, rascunho, pending send
 
 **Review card**:
@@ -69,7 +69,7 @@ The human action that abandons a Draft so it cannot be Confirmed. The abandoned 
 _Avoid_: delete, cancel, reject
 
 **Interface alert**:
-A notice from the chrome that a Chat message, a Recipient, a Confirm, a Revision, a Reply, loading Inbound emails, or marking one read failed. A failed Revision leaves the Review card unchanged. A failed Reply leaves no Draft. On the first load, a failed listing leaves no Inbound emails shown. A later failed listing leaves those already shown. If marking an opened Inbound email read fails, the body stays open and the unread mark stays. It is not an Assistant reply and it is not part of the conversation.
+A notice from the chrome that a Chat message, a Recipient, a Confirm, a Revision, a Reply, loading Inbound emails, or marking one read failed. A Chat message that asks for a new Outbound email and stores no Draft is a failed creation, except when the Assistant reply asks for a Recipient because there is no Pinned recipient, no Named recipient, and no Default inbox, asks which Inbound email, asks which of two Named recipients, or asks for a valid Recipient because the stated address is not valid. A failed creation is not a Revision. On a failed creation the Chat message stays in the Session and the Assistant reply does not enter the Session. An open Review card stays as it was, unless that same Chat message also completed a Revision, which stays on the card. When that message asked for both and only the new Draft was stored, the Revision alert is reported, the new Review card appears, and the Assistant reply does not enter. When both failed, one notice reports both failures. A failed Revision leaves the Review card unchanged. A failed Reply leaves no Draft. On the first load, a failed listing leaves no Inbound emails shown. A later failed listing leaves those already shown. If marking an opened Inbound email read fails, the body stays open and the unread mark stays. It is not an Assistant reply and it is not part of the conversation.
 _Avoid_: error bubble, assistant error, chat error
 
 **Outbound email body**:
@@ -97,7 +97,7 @@ The last line of an Outbound email body, with no signature name after it: "Até 
 _Avoid_: saudação, signature, sign-off
 
 **Session**:
-The on-screen lifetime of the conversation: Chat messages, Assistant replies, sent Outbound emails, and abandoned Drafts. An open Draft stays available while the human writes, apart from that flow. Opening an Inbound email, choosing a Reply from the chrome, and an Arrival notice add nothing to the Session. A Chat message closes an opened Inbound email. Refresh and Clear chat end the Session. Open Drafts stored by the assistant come back on the next load. Already sent Outbound emails stay sent.
+The on-screen lifetime of the conversation: Chat messages, Assistant replies, sent Outbound emails, and abandoned Drafts. It does not keep research waiting for a later Chat message. An open Draft stays available while the human writes, apart from that flow. Opening an Inbound email, choosing a Reply from the chrome, and an Arrival notice add nothing to the Session. A Chat message closes an opened Inbound email. Refresh and Clear chat end the Session. Open Drafts stored by the assistant come back on the next load. Already sent Outbound emails stay sent.
 _Avoid_: history, recent chats, thread
 
 **Clear chat**:
@@ -105,7 +105,7 @@ The human action that empties the Session and Discards every open Draft. Already
 _Avoid_: delete, reset, clear drafts
 
 **Revision**:
-A Chat message that updates one open Draft in place — the latest, when it is the only one — because the human asked to change that email. It keeps that Draft's language unless the Chat message asks for another. It does not add a card to the conversation. The same message may also create another Draft, and with no open Draft, or with several and none identified, the update does not happen. When the Draft is identified, or it is the only one open, the Revision is complete only when that same turn shows the new subject and body on the Review card. If that update does not happen, the card stays as it was and an Interface alert reports the failure. The Assistant reply says the Draft is ready only after the update.
+A Chat message that updates one open Draft in place — the latest, when it is the only one — because the human asked to change that email. It keeps that Draft's language unless the Chat message asks for another. It does not add a card to the conversation. It may say manda, mandar, enviar, envie, envia, or send, and that is not a failed creation. The same message may also create another Draft, and with no open Draft, or with several and none identified, the update does not happen. When the Draft is identified, or it is the only one open, the Revision is complete only when that same turn shows the new subject and body on the Review card. If that update does not happen, the card stays as it was and an Interface alert reports the failure. When no Draft is open, or several are open and none is identified, the Assistant reply enters and does not say the Draft is ready. The Assistant reply says the Draft is ready only after the update. When that same Chat message also asked for a new Outbound email, it says so only when that Draft was stored too.
 _Avoid_: regenerate, new draft
 
 **Prior recipient**:

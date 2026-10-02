@@ -43,6 +43,8 @@ const LOAD_INBOX_ALERT = "Não foi possível carregar a caixa de entrada.";
 const MARK_READ_ALERT = "Não foi possível marcar o e-mail como lido.";
 const REPLY_ALERT = "Não foi possível criar a resposta.";
 const REVISION_ALERT = "Não foi possível atualizar o rascunho.";
+const CREATION_ALERT = "Não foi possível criar o rascunho.";
+const BOTH_ALERT = "Não foi possível criar o rascunho nem atualizar o outro.";
 const WAIT_STATUS = "Preparando a resposta… Pode levar alguns minutos.";
 const INBOX_POLL_MS = 60_000;
 
@@ -551,13 +553,47 @@ export function ChatApp() {
       const incoming = Array.isArray(data.drafts)
         ? data.drafts.filter(isDraftCard).filter((draft) => draft.state === "open")
         : [];
+      if (data.outcome === "both failed") {
+        setAlert(BOTH_ALERT);
+        return;
+      }
+      if (data.outcome === "creation failed") {
+        setAlert(CREATION_ALERT);
+        if (incoming.length > 0) {
+          const nextDrafts = applyTurnDrafts(
+            snapshot,
+            incoming,
+            persistedRecipients.current,
+          );
+          draftsRef.current = nextDrafts;
+          setReviewDrafts(nextDrafts);
+        }
+        return;
+      }
+      if (data.outcome === "revision failed") {
+        setAlert(REVISION_ALERT);
+        if (incoming.length > 0) {
+          const nextDrafts = applyTurnDrafts(
+            snapshot,
+            incoming,
+            persistedRecipients.current,
+          );
+          draftsRef.current = nextDrafts;
+          setReviewDrafts(nextDrafts);
+        }
+        return;
+      }
       const revisionMissed =
+        data.outcome !== "question" &&
         !revisionLanded(snapshot, incoming) &&
         data.revision !== "unidentified" &&
         (data.revision === "failed" || claimsDraftReady(content));
       if (revisionMissed) {
         setAlert(REVISION_ALERT);
         return;
+      }
+      if (data.outcome === "question" && data.revision === "failed") {
+        setAlert(REVISION_ALERT);
       }
       const assistantKey = nextKey("assistant");
       const nextDrafts = applyTurnDrafts(snapshot, incoming, persistedRecipients.current);

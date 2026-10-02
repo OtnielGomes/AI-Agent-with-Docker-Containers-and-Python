@@ -191,14 +191,21 @@ def chat_turn_payload(
     content: str,
     drafts: list[Draft],
     reply_targets: dict[str, str] | None = None,
+    outcome: str | None = None,
+    revision: str | None = None,
 ) -> dict[str, Any]:
     targets = reply_targets or {}
-    return {
+    payload: dict[str, Any] = {
         "content": content,
         "drafts": [
             draft_as_chat_item(item, targets.get(str(item.id))) for item in drafts
         ],
     }
+    if outcome is not None:
+        payload["outcome"] = outcome
+    if revision is not None:
+        payload["revision"] = revision
+    return payload
 
 
 def discard_draft(session: Session, draft_id: uuid.UUID) -> Draft:

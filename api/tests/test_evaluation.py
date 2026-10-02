@@ -802,13 +802,67 @@ def test_model_judge_fails_body_facts_when_the_model_says_the_fact_is_missing():
     def complete(_request):
         return _model_answer(body_facts=False)
 
+    result = _passing("pin-wins")
+    missing = replace(
+        result,
+        drafts=(
+            replace(
+                result.drafts[0],
+                body="Olá, João,\n\nA reunião mudou de dia.\n\nAté mais!",
+            ),
+        ),
+    )
+    score = _score_break(
+        "pin-wins",
+        missing,
+        judge=model_judge(answer=complete),
+    )
+
+    assert score.failed_checks == ("body-facts",)
+    assert score.turn_accuracy == 0
+
+
+def test_model_judge_accepts_a_fact_whose_accepted_wording_is_in_the_body():
+    def complete(_request):
+        return _model_answer(body_facts=False)
+
     score = _score_break(
         "pin-wins",
         _passing("pin-wins"),
         judge=model_judge(answer=complete),
     )
 
-    assert score.failed_checks == ("body-facts",)
+    assert score.failed_checks == ()
+    assert score.turn_accuracy == 1
+
+
+def test_model_judge_does_not_treat_a_ready_sentence_as_sent():
+    def complete(_request):
+        return _model_answer(reply_not_sent=False)
+
+    score = _score_break(
+        "pin-wins",
+        _passing("pin-wins"),
+        judge=model_judge(answer=complete),
+    )
+
+    assert score.failed_checks == ()
+    assert score.turn_accuracy == 1
+
+
+def test_model_judge_still_fails_when_the_reply_says_the_email_was_sent():
+    def complete(_request):
+        return _model_answer(reply_not_sent=True)
+
+    sent = replace(
+        _passing("pin-wins"),
+        assistant_reply=(
+            "O rascunho está pronto para ana@example.com. O email foi enviado."
+        ),
+    )
+    score = _score_break("pin-wins", sent, judge=model_judge(answer=complete))
+
+    assert score.failed_checks == ("reply-not-sent",)
     assert score.turn_accuracy == 0
 
 
@@ -825,9 +879,15 @@ def test_model_judge_reports_the_reply_check_the_model_fails(case_id, flag, fail
     def complete(_request):
         return _model_answer(**{flag: False})
 
+    result = _passing(case_id)
+    if flag == "reply_not_sent":
+        result = replace(
+            result,
+            assistant_reply="Enviei o rascunho para ana@example.com.",
+        )
     score = _score_break(
         case_id,
-        _passing(case_id),
+        result,
         judge=model_judge(answer=complete),
     )
 
@@ -911,6 +971,10 @@ def test_command_judge_uses_gpt_4o_mini_on_the_assistant_credentials(monkeypatch
     assert "the meeting moved to Friday" in text
     assert "A reunião passou para sexta." in text
     assert "O rascunho está pronto para ana@example.com." in text
+    assert "already left" in text
+    assert "'pronto' and 'ready' are not sent claims." in text
+    description = seen["schema"].model_fields["reply_not_sent"].description
+    assert "does not claim the email already left" in description
 
 
 def test_command_judge_omits_base_url_when_the_assistant_has_none(monkeypatch):

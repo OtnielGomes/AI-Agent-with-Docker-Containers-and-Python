@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -128,6 +127,8 @@ class TurnResult:
     research_called: bool
     latency: float
     cost: float
+    outcome: str | None = None
+    revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,10 +149,30 @@ class JudgeVerdict:
 
 
 class _JudgeAnswer(BaseModel):
-    body_facts: bool
-    reply_ready: bool
-    reply_no_extra_offer: bool
-    reply_not_sent: bool
+    body_facts: bool = Field(
+        description=(
+            "True when every fact proposition is in the outbound email body, "
+            "even in other words. True when there are no facts. False when a "
+            "fact is missing or there is no body."
+        )
+    )
+    reply_ready: bool = Field(
+        description=(
+            "When a draft was required, true only if the assistant reply says "
+            "the draft is ready. When no draft was required, true only if the "
+            "reply does not say a draft is ready."
+        )
+    )
+    reply_no_extra_offer: bool = Field(
+        description="False when the assistant reply offers further work. Otherwise true."
+    )
+    reply_not_sent: bool = Field(
+        description=(
+            "True when the assistant reply does not claim the email already left. "
+            "The sentence 'O rascunho está pronto para ana@example.com.' is true. "
+            "'pronto' and 'ready' are true. A claim such as 'foi enviado' is false."
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -516,67 +537,34 @@ def _invoke_chat_turn(
     context: TurnContext,
     supervisor_factory: Callable[[], Any] | None,
 ) -> TurnResult:
-    from api.ai.tools import CaseTools, use_case_tools
     from api.ai.turn_usage import collecting_turn_usage
-    from api.chat.turn_message import (
-        disambiguation_reply,
-        reply_names_recipient,
-        with_open_drafts,
-    )
-    from api.drafts import collecting_created_drafts
-
-    question = disambiguation_reply(context.chat_message, context.inbound_emails)
-    if question is not None:
-        return TurnResult(
-            assistant_reply=question,
-            drafts=(),
-            research_called=False,
-            latency=0.0,
-            cost=0.0,
-        )
+    from api.chat.turn import SupervisorTurnError, run_shared_turn
 
     factory = _default_supervisor if supervisor_factory is None else supervisor_factory
-    binding = CaseTools(
-        session=context.session,
-        default_inbox=context.default_inbox,
-        sender_name=context.sender_name,
-        inbound_emails=context.inbound_emails,
-    )
     with _synthetic_identity():
-        supervisor = factory()
-        message = with_open_drafts(
-            context.chat_message,
-            context.open_drafts,
-            context.inbound_emails,
-            context.pinned_recipient,
-        )
-        config: dict[str, Any] = {}
-        if context.pinned_recipient:
-            config["configurable"] = {"to_email": context.pinned_recipient}
-        with use_case_tools(binding):
-            with collecting_turn_usage() as (extra_usage, research_calls):
-                with collecting_created_drafts() as created:
-                    started = time.perf_counter()
-                    result = supervisor.invoke(
-                        {"messages": [{"role": "user", "content": message}]},
-                        config=config,
-                    )
-                    latency = time.perf_counter() - started
-    if not isinstance(result, dict) or not result.get("messages"):
-        raise ValueError("Supervisor returned no result")
-    messages = result["messages"]
-    from api.ai.messages import extract_assistant_reply
-
-    drafts = _observed_drafts(context.open_drafts, created)
-    reply = extract_assistant_reply(list(messages))
-    if len(drafts) == 1:
-        reply = reply_names_recipient(reply, drafts[0].recipient, context.chat_message)
+        with collecting_turn_usage() as (extra_usage, research_calls):
+            try:
+                outcome = run_shared_turn(
+                    chat_message=context.chat_message,
+                    pinned_recipient=context.pinned_recipient,
+                    open_drafts=context.open_drafts,
+                    inbound_emails=context.inbound_emails,
+                    session=context.session,
+                    default_inbox=context.default_inbox,
+                    sender_name=context.sender_name,
+                    supervisor_factory=factory,
+                )
+            except SupervisorTurnError as exc:
+                raise ValueError("Supervisor returned no result") from exc
+    drafts = _observed_drafts(context.open_drafts, outcome.drafts)
     return TurnResult(
-        assistant_reply=reply,
+        assistant_reply=outcome.assistant_reply,
         drafts=drafts,
-        research_called=bool(research_calls) or _research_called(messages),
-        latency=latency,
-        cost=_messages_cost(messages) + _messages_cost(extra_usage),
+        research_called=bool(research_calls) or _research_called(outcome.messages),
+        latency=outcome.latency,
+        cost=_messages_cost(outcome.messages) + _messages_cost(extra_usage),
+        outcome=outcome.outcome,
+        revision=outcome.revision,
     )
 
 
@@ -700,7 +688,8 @@ def model_judge(
         verdict = _verdict_from(answer(request))
         if verdict is None:
             raise ValueError("Unreadable judge answer")
-        return verdict
+        verdict = _settle_sent_claim(verdict, request.assistant_reply)
+        return _settle_body_facts(verdict, request)
 
     return judge
 
@@ -739,7 +728,11 @@ _JUDGE_INSTRUCTIONS = (
     "When no draft was required, reply_ready is true only if the reply does not "
     "say a draft is ready. "
     "reply_no_extra_offer is false when the reply offers further work. "
-    "reply_not_sent is false when the reply claims the email was sent."
+    "reply_not_sent is false only when the assistant reply claims the email "
+    "already left, for example 'foi enviado' or 'I sent it'. "
+    "Saying the draft is ready, naming the recipient, or saying it will be "
+    "sent after the human confirms is not a sent claim. "
+    "'pronto' and 'ready' are not sent claims."
 )
 
 
@@ -777,6 +770,37 @@ def _judge_client_params() -> dict[str, str]:
     if base_url:
         params["base_url"] = base_url
     return params
+
+
+_SENT_CLAIMS = ("foi enviado", "já enviei", "ja enviei")
+
+
+def _settle_sent_claim(verdict: JudgeVerdict, reply: str) -> JudgeVerdict:
+    """A ready sentence is not a sent claim. A sent claim stays a failure."""
+    folded = (reply or "").strip().casefold()
+    if any(phrase in folded for phrase in _SENT_CLAIMS):
+        sent_ok = False
+    elif folded.startswith("o rascunho está pronto para ") or folded.startswith(
+        "the draft is ready for "
+    ):
+        sent_ok = True
+    else:
+        return verdict
+    if verdict.reply_not_sent == sent_ok:
+        return verdict
+    return replace(verdict, reply_not_sent=sent_ok)
+
+
+def _settle_body_facts(verdict: JudgeVerdict, request: JudgeRequest) -> JudgeVerdict:
+    """A fact whose Accepted wording is in the body counts, even if the model says no."""
+    body = (request.outbound_email_body or "").casefold()
+    if not request.fact_propositions:
+        return verdict
+    if not all(_fact_present(fact, body) for fact in request.fact_propositions):
+        return verdict
+    if verdict.body_facts:
+        return verdict
+    return replace(verdict, body_facts=True)
 
 
 def _judge_case_text(request: JudgeRequest) -> str:

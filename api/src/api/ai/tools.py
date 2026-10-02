@@ -27,21 +27,36 @@ class CaseTools:
     """Draft store and inbox for one Evaluation case."""
 
     session: Session
-    default_inbox: str
-    sender_name: str
+    default_inbox: str | None
+    sender_name: str | None
     inbound_emails: tuple[Any, ...]
 
 
 _case_tools: ContextVar[CaseTools | None] = ContextVar("case_tools", default=None)
+_reply_inbounds: ContextVar[tuple[Any, ...]] = ContextVar(
+    "reply_inbounds", default=()
+)
+
+
+@contextmanager
+def use_reply_inbounds(emails: tuple[Any, ...] | list[Any]) -> Iterator[None]:
+    """Let a Reply see the Inbound email bodies for this turn."""
+    token = _reply_inbounds.set(tuple(emails))
+    try:
+        yield
+    finally:
+        _reply_inbounds.reset(token)
 
 
 @contextmanager
 def use_case_tools(binding: CaseTools) -> Iterator[None]:
     """Point the inbox and Draft tools at one case. The mailbox stays closed."""
     token = _case_tools.set(binding)
+    inbound_token = _reply_inbounds.set(tuple(binding.inbound_emails))
     try:
         yield
     finally:
+        _reply_inbounds.reset(inbound_token)
         _case_tools.reset(token)
 
 
@@ -102,10 +117,11 @@ def research_email(query:str):
         query: The query to research.
     """
     from api.ai.services import generate_email_message
-    from api.ai.turn_usage import mark_research_called
+    from api.ai.turn_usage import mark_research_called, note_research_draft
 
     mark_research_called()
     response = generate_email_message(query)
+    note_research_draft(response.subject, response.contents)
     msg = f"Subject: {response.subject}:\nBody: {response.contents}"
 
     return msg
@@ -134,6 +150,14 @@ def send_me_email(
     """
     if reply and not (to_email and to_email.strip()):
         return "Error creating email draft: a Reply needs the sender address."
+    if reply:
+        rewritten = _reply_without_inbound_copy(content, _inbound_body(inbound_id))
+        if rewritten is None:
+            return (
+                "Error creating email draft: the body copies the Inbound email. "
+                "Write your own answer without that body and call send_me_email again."
+            )
+        content = rewritten
     try:
         pinned = None
         if config and not reply:
@@ -158,6 +182,32 @@ def send_me_email(
         f"Draft created for {draft.recipient} with subject {draft.subject}. "
         "It will be sent only after the human confirms it in the chat UI."
     )
+
+
+def _inbound_body(inbound_id: str | None) -> str:
+    if not inbound_id:
+        return ""
+    for item in _reply_inbounds.get():
+        if getattr(item, "id", None) == inbound_id:
+            body = getattr(item, "body", "") or ""
+            return body.strip()
+    return ""
+
+
+def _reply_without_inbound_copy(content: str, inbound_body: str) -> str | None:
+    """Drop a pasted Inbound email body. None means the Reply has no answer left."""
+    if not inbound_body or inbound_body not in (content or ""):
+        return content
+    stripped = "\n".join(
+        line for line in content.replace(inbound_body, "").splitlines()
+    )
+    while "\n\n\n" in stripped:
+        stripped = stripped.replace("\n\n\n", "\n\n")
+    stripped = stripped.strip()
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if len(lines) <= 2:
+        return None
+    return stripped
 
 
 def _optional_recipient(recipient: str | None) -> str | None:

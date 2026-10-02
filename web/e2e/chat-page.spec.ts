@@ -1427,3 +1427,183 @@ test("a visible tab looks again after 60 seconds and a hidden tab does not", asy
   expect(callsTo(world, "/api/inbox", "GET").length).toBe(hidden);
   await expect(page.getByRole("link", { name: /Oculto/ })).toHaveCount(0);
 });
+
+test("a research draft opens its review card, and inbox wording stays a reply", async ({ page }) => {
+  world.chat = async (route) => {
+    const body = route.request().postDataJSON() as { message: string };
+    if (body.message.startsWith("Pesquisa os passos")) {
+      await fulfillJson(route, {
+        content: "O rascunho está pronto para ana@example.com.",
+        drafts: [
+          draft({
+            id: "latte",
+            subject: "Latte",
+            body: "Olá,\n\nAqueça o leite.\n\nAté mais!",
+            recipient: "ana@example.com",
+          }),
+        ],
+        outcome: "ready",
+      });
+      return;
+    }
+    await fulfillJson(route, { content: "Você tem dois emails.", drafts: [] });
+  };
+  await openChat(page);
+  await page
+    .getByRole("textbox", { name: "Mensagem" })
+    .fill("Pesquisa os passos de um latte e me manda por email.");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(page.getByRole("article", { name: "Rascunho: Latte" })).toBeVisible();
+  await expect(page.getByRole("article", { name: "Assistente" })).toContainText(
+    "O rascunho está pronto para ana@example.com.",
+  );
+  await expect(interfaceAlert(page)).toHaveCount(0);
+
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("Lista meus emails.");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(page.getByRole("article", { name: "Assistente" }).last()).toContainText(
+    "Você tem dois emails.",
+  );
+  await expect(interfaceAlert(page)).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Rascunhos" }).getByRole("article")).toHaveCount(1);
+});
+
+test("a combined message keeps the part that landed and one notice", async ({ page }) => {
+  world.drafts = [
+    draft({ id: "only", subject: "Original", body: "corpo", recipient: "ana@example.com" }),
+  ];
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "O rascunho está pronto para bia@example.com, e o outro foi atualizado.",
+      drafts: [],
+      outcome: "both failed",
+    });
+  };
+  await openChat(page);
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("manda e muda");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(interfaceAlert(page)).toHaveText(
+    "Não foi possível criar o rascunho nem atualizar o outro.",
+  );
+  await expect(interfaceAlert(page)).toHaveCount(1);
+  await expect(page.getByRole("article", { name: "Assistente" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Assunto", exact: true })).toHaveValue("Original");
+
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "O rascunho está pronto para bia@example.com.",
+      drafts: [
+        draft({ id: "only", subject: "Reunião", body: "corpo", recipient: "ana@example.com" }),
+      ],
+      outcome: "creation failed",
+    });
+  };
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("só a revisão");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(interfaceAlert(page)).toHaveText("Não foi possível criar o rascunho.");
+  await expect(page.getByRole("article", { name: "Assistente" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Assunto", exact: true })).toHaveValue("Reunião");
+
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "O rascunho está pronto para bia@example.com.",
+      drafts: [
+        draft({
+          id: "fresh",
+          subject: "Sexta",
+          body: "Olá,\n\nSexta.\n\nAté mais!",
+          recipient: "bia@example.com",
+        }),
+      ],
+      outcome: "revision failed",
+    });
+  };
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("só o novo");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(interfaceAlert(page)).toHaveText("Não foi possível atualizar o rascunho.");
+  await expect(page.getByRole("article", { name: "Assistente" })).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Rascunho: Reunião" })).toBeVisible();
+  await expect(page.getByRole("article", { name: "Rascunho: Sexta" })).toBeVisible();
+
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "Qual endereço? ana@example.com ou bruno@example.com.",
+      drafts: [],
+      outcome: "question",
+      revision: "failed",
+    });
+  };
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("qual endereço");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(interfaceAlert(page)).toHaveText("Não foi possível atualizar o rascunho.");
+  await expect(page.getByRole("article", { name: "Assistente" }).last()).toContainText(
+    "Qual endereço? ana@example.com ou bruno@example.com.",
+  );
+  await expect(page.getByRole("article", { name: "Rascunho: Reunião" }).getByRole("textbox", { name: "Assunto", exact: true })).toHaveValue("Reunião");
+});
+
+test("a failed creation keeps the chat message and the open review card", async ({ page }) => {
+  world.drafts = [
+    draft({ id: "only", subject: "Original", body: "corpo", recipient: "bia@example.com" }),
+  ];
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "O rascunho está pronto para ana@example.com.",
+      drafts: [],
+      outcome: "creation failed",
+    });
+  };
+  await openChat(page);
+  await page
+    .getByRole("textbox", { name: "Mensagem" })
+    .fill("Manda um email para ana@example.com dizendo que a reunião passou para sexta.");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+
+  await expect(interfaceAlert(page)).toHaveCount(1);
+  await expect(interfaceAlert(page)).toHaveText("Não foi possível criar o rascunho.");
+  await expect(page.getByRole("article", { name: "Assistente" })).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Você" })).toContainText(
+    "Manda um email para ana@example.com dizendo que a reunião passou para sexta.",
+  );
+  await expect(page.getByRole("textbox", { name: "Corpo do e-mail", exact: true })).toHaveValue("corpo");
+  await expect(page.getByRole("textbox", { name: "Assunto", exact: true })).toHaveValue("Original");
+
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "The draft is ready for ana@example.com.",
+      drafts: [],
+      outcome: "creation failed",
+    });
+  };
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("Send the notes about the meeting.");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(interfaceAlert(page)).toHaveText("Não foi possível criar o rascunho.");
+  await expect(page.getByRole("article", { name: "Assistente" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Corpo do e-mail", exact: true })).toHaveValue("corpo");
+
+  world.chat = async (route) => {
+    await fulfillJson(route, {
+      content: "The draft is ready for ana@example.com.",
+      drafts: [
+        draft({
+          id: "fresh",
+          subject: "Friday",
+          body: "Hello,\n\nThe meeting moved.\n\nTalk soon!",
+          recipient: "ana@example.com",
+        }),
+      ],
+      outcome: "ready",
+    });
+  };
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("Send a note saying the meeting moved.");
+  await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+  await expect(interfaceAlert(page)).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Assistente" }).last()).toContainText(
+    "The draft is ready for ana@example.com.",
+  );
+  const opened = page.getByRole("article", { name: "Rascunho: Friday" });
+  await expect(opened.getByRole("textbox", { name: "Destinatário", exact: true })).toHaveValue(
+    "ana@example.com",
+  );
+  await expect(page.getByRole("article", { name: "Rascunho: Original" })).toBeVisible();
+});

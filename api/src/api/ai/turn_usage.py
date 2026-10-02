@@ -11,6 +11,9 @@ _messages: ContextVar[list[Any] | None] = ContextVar("turn_usage", default=None)
 _research_calls: ContextVar[list[bool] | None] = ContextVar(
     "research_calls", default=None
 )
+_research_drafts: ContextVar[list[tuple[str, str]] | None] = ContextVar(
+    "research_drafts", default=None
+)
 
 
 @contextmanager
@@ -36,3 +39,24 @@ def mark_research_called() -> None:
     bucket = _research_calls.get()
     if bucket is not None:
         bucket.append(True)
+
+
+@contextmanager
+def collecting_research_drafts() -> Iterator[list[tuple[str, str]]]:
+    """Subject and body returned by the research tool during one turn."""
+    drafts: list[tuple[str, str]] = []
+    token = _research_drafts.set(drafts)
+    try:
+        yield drafts
+    finally:
+        _research_drafts.reset(token)
+
+
+def note_research_draft(subject: str, body: str) -> None:
+    bucket = _research_drafts.get()
+    if bucket is None:
+        return
+    cleaned_subject = subject.strip()
+    cleaned_body = body.strip()
+    if cleaned_subject and cleaned_body:
+        bucket.append((cleaned_subject, cleaned_body))

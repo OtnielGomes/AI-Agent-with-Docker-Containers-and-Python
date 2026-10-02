@@ -38,6 +38,8 @@ export type InboundEmailSnapshot = {
 export type ChatTurnResponse = {
   content: string;
   drafts: DraftCard[];
+  outcome?: string;
+  revision?: string;
 };
 
 export function resolveBackendUrl(override?: string | null): string {
@@ -197,9 +199,13 @@ export async function sendChatMessage(
   if (data.content == null) {
     throw new AssistantError("Backend response missing 'content' field.");
   }
+  const outcome = typeof data.outcome === "string" ? data.outcome : undefined;
+  const revision = typeof data.revision === "string" ? data.revision : undefined;
   return {
     content: String(data.content),
     drafts: parseDrafts(data.drafts),
+    ...(outcome ? { outcome } : {}),
+    ...(revision ? { revision } : {}),
   };
 }
 

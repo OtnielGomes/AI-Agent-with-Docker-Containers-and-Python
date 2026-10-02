@@ -1,5 +1,6 @@
 # imports:
 
+import os
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session,select
@@ -10,20 +11,11 @@ from .models import (
     ChatMessage,
     ChatMessage_listItem,
 )
-from .turn_message import (
-    disambiguation_reply,
-    reply_names_recipient,
-    with_open_drafts,
-)
 from api.db import get_session
 from api.ai.agents import get_supervisor
-from api.ai.messages import extract_assistant_reply
 from api.ai.schemas import SupervisorMessageSchema
-from api.drafts import (
-    chat_turn_payload,
-    collecting_created_drafts,
-    collecting_reply_targets,
-)
+from api.chat.turn import SupervisorTurnError, run_shared_turn
+from api.drafts import chat_turn_payload
 from api.myemailer.recipient import validated_recipient
 
 
@@ -79,39 +71,25 @@ def chat_create_message(
     session.add(obj)
     session.commit()
 
-    question = disambiguation_reply(payload.message, payload.inbound_emails)
-    if question is not None:
-        return chat_turn_payload(question, [])
-
-    supe = get_supervisor()
-    msg_data = {
-        "messages": [
-            {
-                "role": "user",
-                "content": with_open_drafts(
-                    payload.message,
-                    payload.open_drafts,
-                    payload.inbound_emails,
-                    pin,
-                ),
-            },
-        ]
-    }
-    invoke_config = None
-    if pin:
-        invoke_config = {"configurable": {"to_email": pin}}
-
-    with collecting_reply_targets() as reply_targets:
-        with collecting_created_drafts() as drafts:
-            result = supe.invoke(msg_data, config=invoke_config)
-    if not result:
-        raise HTTPException(status_code=400, detail="Failed to get supervisor response")
-    
-    messages = result.get("messages")
-    if not messages:
-        raise HTTPException(status_code=400, detail="Failed to get supervisor response")
-    
-    reply = extract_assistant_reply(messages)
-    if len(drafts) == 1:
-        reply = reply_names_recipient(reply, drafts[0].recipient, payload.message)
-    return chat_turn_payload(reply, drafts, reply_targets)
+    try:
+        outcome = run_shared_turn(
+            chat_message=payload.message,
+            pinned_recipient=pin,
+            open_drafts=payload.open_drafts,
+            inbound_emails=payload.inbound_emails,
+            session=session,
+            default_inbox=os.environ.get("EMAIL_ADDRESS"),
+            sender_name=os.environ.get("EMAIL_SENDER_NAME"),
+            supervisor_factory=get_supervisor,
+        )
+    except SupervisorTurnError as exc:
+        raise HTTPException(
+            status_code=400, detail="Failed to get supervisor response"
+        ) from exc
+    return chat_turn_payload(
+        outcome.assistant_reply,
+        list(outcome.drafts),
+        outcome.reply_targets,
+        outcome.outcome,
+        outcome.revision,
+    )

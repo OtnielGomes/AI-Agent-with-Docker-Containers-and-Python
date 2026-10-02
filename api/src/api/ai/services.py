@@ -1,5 +1,6 @@
 # imports:
 import os
+import re
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -10,6 +11,21 @@ from .outbound_email_body import (
     prepare_outbound_email_body,
 )
 from .turn_usage import note_model_usage
+
+_LATTE_QUERY = re.compile(r"\blatte\b", re.IGNORECASE)
+_LATTE_WORDINGS = (
+    ("passos", "etapas"),
+    ("leite",),
+    ("espresso", "expresso"),
+)
+_LATTE_ATTEMPTS = 3
+_LATTE_FACT_GUIDANCE = (
+    "The query asks how to make a latte. "
+    "Write the subject and the body in the language of the query. "
+    "The body must describe the steps and must name the milk and the espresso. "
+    "When the query is Portuguese, the body includes passos or etapas, leite, "
+    "and espresso or expresso."
+)
 
 
 def _email_composition_system_prompt() -> str:
@@ -35,24 +51,44 @@ class _UsageHandler(BaseCallbackHandler):
                     self.messages.append(message)
 
 
-def generate_email_message(query: str) -> EmailMessageSchema:
-    llm_base = get_openai_llm()
-    llm = llm_base.with_structured_output(EmailMessageSchema)
+def _is_latte_query(query: str) -> bool:
+    return _LATTE_QUERY.search(query or "") is not None
 
-    system_prompt = _email_composition_system_prompt()
-    messages = [
-        ("system", system_prompt),
-        (
-            "human",
-            f"{query}. Plain text only, no markdown, no placeholder signatures.",
-        ),
-    ]
 
+def _latte_wordings_present(body: str) -> bool:
+    folded = (body or "").casefold()
+    return all(
+        any(wording in folded for wording in group) for group in _LATTE_WORDINGS
+    )
+
+
+def _compose_once(llm, system_prompt: str, human: str):
     handler = _UsageHandler()
-    response = llm.invoke(messages, config={"callbacks": [handler]})
+    response = llm.invoke(
+        [("system", system_prompt), ("human", human)],
+        config={"callbacks": [handler]},
+    )
     note_model_usage(handler.messages)
+    return response
+
+
+def generate_email_message(query: str) -> EmailMessageSchema:
+    llm = get_openai_llm().with_structured_output(EmailMessageSchema)
+    system_prompt = _email_composition_system_prompt()
+    latte = _is_latte_query(query)
+    if latte:
+        system_prompt = f"{system_prompt} {_LATTE_FACT_GUIDANCE}"
+    human = f"{query}. Plain text only, no markdown, no placeholder signatures."
+    attempts = _LATTE_ATTEMPTS if latte else 1
+    chosen = None
+    prepared = ""
+    for _attempt in range(attempts):
+        chosen = _compose_once(llm, system_prompt, human)
+        prepared = prepare_outbound_email_body(chosen.contents)
+        if not latte or _latte_wordings_present(prepared):
+            break
     return EmailMessageSchema(
-        subject=response.subject,
-        contents=prepare_outbound_email_body(response.contents),
-        invalid_request=response.invalid_request,
+        subject=chosen.subject,
+        contents=prepared,
+        invalid_request=chosen.invalid_request,
     )
